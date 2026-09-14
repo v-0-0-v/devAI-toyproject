@@ -2,6 +2,11 @@ export const TILE_SIZE = 32;
 export const MAP_WIDTH = 20;
 export const MAP_HEIGHT = 15;
 
+// Chebyshev-distance (tile "square") radius within which two players are
+// considered close enough to start a video call, mirroring ZEP/Gather.town's
+// proximity chat.
+export const PROXIMITY_RADIUS = 3;
+
 // 0 = floor (walkable), 1 = wall (blocked)
 // Border walls + a couple of inner obstacles, roughly resembling a small office layout.
 export const WALLS: number[][] = (() => {

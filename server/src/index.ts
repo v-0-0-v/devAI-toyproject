@@ -2,8 +2,23 @@ import express from "express";
 import cors from "cors";
 import { createServer } from "node:http";
 import { Server } from "socket.io";
-import { TILE_SIZE, MAP_WIDTH, MAP_HEIGHT, WALLS, isWalkable, randomSpawnPoint } from "./map.js";
-import type { Direction, Player, InitPayload } from "./types.js";
+import {
+  TILE_SIZE,
+  MAP_WIDTH,
+  MAP_HEIGHT,
+  WALLS,
+  PROXIMITY_RADIUS,
+  isWalkable,
+  randomSpawnPoint,
+} from "./map.js";
+import type {
+  Direction,
+  Player,
+  InitPayload,
+  OfferPayload,
+  AnswerPayload,
+  IceCandidatePayload,
+} from "./types.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN ?? "http://localhost:5173";
@@ -18,6 +33,54 @@ const io = new Server(httpServer, {
 });
 
 const players: Record<string, Player> = {};
+
+// Pair keys ("idA|idB", sorted) of players currently close enough to be in a call.
+const inCallPairs = new Set<string>();
+
+function pairKey(a: string, b: string): string {
+  return a < b ? `${a}|${b}` : `${b}|${a}`;
+}
+
+function isNear(a: Player, b: Player): boolean {
+  return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) <= PROXIMITY_RADIUS;
+}
+
+// Re-evaluates proximity between `playerId` and every other player, emitting
+// "proximity-joined"/"proximity-left" to both sides of a pair whenever their
+// in-call state changes. Called after a player spawns or moves.
+function updateProximity(playerId: string) {
+  const player = players[playerId];
+  if (!player) return;
+
+  for (const other of Object.values(players)) {
+    if (other.id === playerId) continue;
+    const key = pairKey(playerId, other.id);
+    const near = isNear(player, other);
+    const wasInCall = inCallPairs.has(key);
+
+    if (near && !wasInCall) {
+      inCallPairs.add(key);
+      io.to(playerId).emit("proximity-joined", { peerId: other.id, nickname: other.nickname });
+      io.to(other.id).emit("proximity-joined", { peerId: playerId, nickname: player.nickname });
+    } else if (!near && wasInCall) {
+      inCallPairs.delete(key);
+      io.to(playerId).emit("proximity-left", { peerId: other.id });
+      io.to(other.id).emit("proximity-left", { peerId: playerId });
+    }
+  }
+}
+
+// Ends every call `playerId` is currently in, notifying the remaining peer.
+// Called right before a disconnected player is removed.
+function endAllCallsFor(playerId: string) {
+  for (const key of [...inCallPairs]) {
+    const [a, b] = key.split("|");
+    if (a !== playerId && b !== playerId) continue;
+    inCallPairs.delete(key);
+    const other = a === playerId ? b : a;
+    io.to(other).emit("proximity-left", { peerId: playerId });
+  }
+}
 
 const DIRECTION_DELTA: Record<Direction, { dx: number; dy: number }> = {
   up: { dx: 0, dy: -1 },
@@ -56,6 +119,7 @@ io.on("connection", (socket) => {
     };
     socket.emit("init", initPayload);
     socket.broadcast.emit("player-joined", player);
+    updateProximity(socket.id);
   });
 
   socket.on("move", (direction: unknown) => {
@@ -72,10 +136,29 @@ io.on("connection", (socket) => {
     player.x = nextX;
     player.y = nextY;
     io.emit("player-moved", { id: socket.id, x: player.x, y: player.y });
+    updateProximity(socket.id);
+  });
+
+  // WebRTC signaling relay: the server never inspects offers/answers/ICE
+  // candidates, it just forwards them to the intended peer by socket id.
+  socket.on("webrtc-offer", ({ to, offer }: OfferPayload) => {
+    if (typeof to !== "string") return;
+    io.to(to).emit("webrtc-offer", { from: socket.id, offer });
+  });
+
+  socket.on("webrtc-answer", ({ to, answer }: AnswerPayload) => {
+    if (typeof to !== "string") return;
+    io.to(to).emit("webrtc-answer", { from: socket.id, answer });
+  });
+
+  socket.on("webrtc-ice-candidate", ({ to, candidate }: IceCandidatePayload) => {
+    if (typeof to !== "string") return;
+    io.to(to).emit("webrtc-ice-candidate", { from: socket.id, candidate });
   });
 
   socket.on("disconnect", () => {
     if (!players[socket.id]) return;
+    endAllCallsFor(socket.id);
     delete players[socket.id];
     io.emit("player-left", { id: socket.id });
   });

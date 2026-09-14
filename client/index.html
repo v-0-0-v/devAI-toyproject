@@ -23,19 +23,51 @@
         position: fixed; bottom: 12px; left: 0; right: 0; text-align: center;
         color: #9ca3af; font-family: system-ui, sans-serif; font-size: 12px;
       }
+
+      #video-bar {
+        position: fixed; top: 0; left: 0; right: 0; z-index: 5;
+        display: flex; gap: 8px; padding: 10px; overflow-x: auto;
+        background: linear-gradient(#000000aa, transparent);
+        font-family: system-ui, sans-serif;
+      }
+      .video-tile {
+        position: relative; flex: 0 0 auto; width: 140px; height: 105px;
+        background: #1f2937; border-radius: 8px; overflow: hidden;
+        border: 2px solid #374151;
+      }
+      .video-tile video {
+        width: 100%; height: 100%; object-fit: cover; display: block;
+      }
+      .video-tile .video-label {
+        position: absolute; left: 4px; bottom: 4px; font-size: 11px; color: #fff;
+        background: #00000080; padding: 1px 5px; border-radius: 4px;
+      }
+      .video-tile .video-controls {
+        position: absolute; right: 4px; top: 4px; display: flex; gap: 4px;
+      }
+      .video-tile .video-controls button {
+        width: 22px; height: 22px; border: none; border-radius: 4px; cursor: pointer;
+        background: #00000090; color: #fff; font-size: 12px; line-height: 1;
+      }
+      .video-tile .video-controls button.off { background: #ef4444; }
+      .video-tile.no-media {
+        display: flex; align-items: center; justify-content: center;
+        color: #9ca3af; font-size: 11px; text-align: center; padding: 6px;
+      }
     </style>
   </head>
   <body>
     <div id="login">
       <form id="login-form">
         <h1>ZEP Mini MVP</h1>
-        <p>닉네임을 입력하고 방향키/WASD로 이동해보세요.</p>
+        <p>닉네임을 입력하고 방향키/WASD로 이동해보세요. 가까이 있는 사람과는 자동으로 화상채팅이 연결됩니다.</p>
         <input id="nickname" maxlength="16" placeholder="닉네임" autocomplete="off" required />
         <button type="submit">입장하기</button>
       </form>
     </div>
+    <div id="video-bar"></div>
     <div id="app"></div>
-    <div id="hint" hidden>방향키 / WASD로 이동</div>
+    <div id="hint" hidden>방향키 / WASD로 이동 — 가까이 있는 사람과 자동으로 화상채팅 연결</div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

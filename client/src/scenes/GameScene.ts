@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { Network } from "../network";
+import type { Network } from "../network";
 import type { Direction, InitPayload, LeftPayload, MovedPayload, Player } from "../types";
 
 interface PlayerVisual {
@@ -13,8 +13,7 @@ interface PlayerVisual {
 const MOVE_DURATION_MS = 110;
 
 export class GameScene extends Phaser.Scene {
-  private nickname = "";
-  private network?: Network;
+  private network!: Network;
   private tileSize = 32;
   private mapWidth = 0;
   private mapHeight = 0;
@@ -28,20 +27,18 @@ export class GameScene extends Phaser.Scene {
     super("game");
   }
 
-  init(data: { nickname: string }) {
-    this.nickname = data.nickname;
+  init(data: { network: Network }) {
+    this.network = data.network;
   }
 
   create() {
     this.cursors = this.input.keyboard!.createCursorKeys();
     this.wasd = this.input.keyboard!.addKeys("W,A,S,D") as typeof this.wasd;
 
-    this.network = new Network(this.nickname, {
-      onInit: (payload) => this.handleInit(payload),
-      onPlayerJoined: (player) => this.spawnPlayer(player),
-      onPlayerMoved: (payload) => this.movePlayer(payload),
-      onPlayerLeft: (payload) => this.removePlayer(payload),
-    });
+    this.network.on("init", (payload) => this.handleInit(payload));
+    this.network.on("player-joined", (player) => this.spawnPlayer(player));
+    this.network.on("player-moved", (payload) => this.movePlayer(payload));
+    this.network.on("player-left", (payload) => this.removePlayer(payload));
   }
 
   private handleInit(payload: InitPayload) {
@@ -135,7 +132,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   update() {
-    if (!this.network || this.moveCooldown) return;
+    if (this.moveCooldown) return;
 
     let direction: Direction | null = null;
     if (this.cursors.left.isDown || this.wasd.A.isDown) direction = "left";

@@ -28,3 +28,27 @@ export interface MovedPayload {
 export interface LeftPayload {
   id: string;
 }
+
+export interface ProximityJoinedPayload {
+  peerId: string;
+  nickname: string;
+}
+
+export interface ProximityLeftPayload {
+  peerId: string;
+}
+
+export interface RelayedOfferPayload {
+  from: string;
+  offer: RTCSessionDescriptionInit;
+}
+
+export interface RelayedAnswerPayload {
+  from: string;
+  answer: RTCSessionDescriptionInit;
+}
+
+export interface RelayedIceCandidatePayload {
+  from: string;
+  candidate: RTCIceCandidateInit;
+}

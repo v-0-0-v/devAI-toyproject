@@ -18,3 +18,29 @@ export interface InitPayload {
     walls: number[][];
   };
 }
+
+export interface ProximityJoinedPayload {
+  peerId: string;
+  nickname: string;
+}
+
+export interface ProximityLeftPayload {
+  peerId: string;
+}
+
+// The server never inspects SDP offers/answers or ICE candidates — it only
+// relays them between the two peers involved, so their contents are opaque here.
+export interface OfferPayload {
+  to: string;
+  offer: unknown;
+}
+
+export interface AnswerPayload {
+  to: string;
+  answer: unknown;
+}
+
+export interface IceCandidatePayload {
+  to: string;
+  candidate: unknown;
+}
