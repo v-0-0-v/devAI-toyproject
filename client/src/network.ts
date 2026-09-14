@@ -12,7 +12,13 @@ import type {
   RelayedOfferPayload,
 } from "./types";
 
-const SERVER_URL = import.meta.env.VITE_SERVER_URL ?? "http://localhost:3001";
+// If VITE_SERVER_URL isn't set: in dev, default to the local server on a
+// different port; in a production build, connect same-origin (the server is
+// expected to be reverse-proxied under the same domain as the static site —
+// see deploy/Caddyfile) by passing `undefined` to socket.io-client, which it
+// treats as "use the page's own origin".
+const SERVER_URL: string | undefined =
+  import.meta.env.VITE_SERVER_URL || (import.meta.env.DEV ? "http://localhost:3001" : undefined);
 
 interface ServerEvents {
   init: InitPayload;

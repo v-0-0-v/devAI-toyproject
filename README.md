@@ -29,9 +29,12 @@
 
 ```
 zep-mini-mvp/
-├── docker-compose.yml  # coturn (TURN 서버) 로컬/배포용
-├── turnserver.conf     # coturn 설정 (비밀키는 파일에 두지 않고 CLI로 주입)
-├── server/   # Node.js + TypeScript + Express + Socket.IO
+├── docker-compose.yml       # 로컬 개발용: coturn만 (STUN-only로도 동작하니 선택 사항)
+├── docker-compose.prod.yml  # 실제 배포용: Caddy(TLS) + server + coturn(TLS) 전체 스택
+├── turnserver.conf          # coturn 개발용 설정 (TLS 없음)
+├── turnserver.prod.conf     # coturn 배포용 설정 (TLS, 넓은 릴레이 포트 범위)
+├── deploy/                  # 배포 가이드, Caddyfile, systemd 유닛, certbot 갱신 훅
+├── server/   # Node.js + TypeScript + Express + Socket.IO (+ Dockerfile)
 │             # 권위 서버: 이동 검증/브로드캐스트, 근접 판정, WebRTC 시그널링 중계, TURN 크리덴셜 발급
 └── client/   # Vite + TypeScript + Phaser 3
               # 타일맵 렌더링, 입력, 아바타, WebRTC 화상채팅(webrtc.ts, videoChat.ts)
@@ -78,15 +81,15 @@ cd server
 npm run smoke-test
 ```
 
-## Production TURN 노트
+## 실제 배포 (프로덕션)
 
-로컬 `docker-compose.yml` / `turnserver.conf`는 개발용 최소 구성입니다. 실제 배포 시 고려할 점:
+도메인 + VPS에 Caddy(자동 TLS) + 서버 + coturn(TLS)을 한 번에 올리는 `docker-compose.prod.yml` 구성이 준비되어 있습니다. DNS/방화벽 설정부터 certbot 인증서 발급, systemd 유닛 설치까지 전 과정은 **[`deploy/DEPLOY.md`](deploy/DEPLOY.md)** 를 따라 하세요.
 
-- **공인 IP 필요**: coturn은 클라이언트에게 자신의 릴레이 주소를 알려줘야 하므로, NAT/컨테이너 뒤에 있다면 `turnserver.conf`에 `external-ip=<공인IP>/<내부IP>`를 설정해야 합니다.
-- **릴레이 포트 범위 개방**: `min-port`/`max-port`(기본 49160-49200)에 해당하는 UDP 포트 전체를 방화벽에서 열어야 하며, 동시 통화가 많다면 범위를 넓혀야 합니다 (통화당 1포트).
-- **TLS 활성화**: `turnserver.conf`의 `no-tls`/`no-dtls`를 제거하고 실제 인증서를 연결해 `turns:` 스킴을 사용하세요 — 그래야 크리덴셜이 평문으로 오가지 않습니다.
-- **`TURN_URLS` 갱신**: `server/.env`의 `TURN_URLS`를 배포된 공인 호스트/포트(예: `turn:turn.example.com:3478`)로 바꿔야 클라이언트가 실제로 연결할 수 있습니다.
-- **`--allow-loopback-peers`는 사용하지 마세요**: 로컬 테스트 시에만 임시로 쓸 수 있는 플래그로, coturn이 내부망(loopback 등)으로 릴레이하지 못하게 막는 기본 보호를 무력화합니다.
+핵심 요약:
+- **Caddy**가 정적 클라이언트를 서빙하고 `/socket.io`를 서버로 프록시 — 클라이언트·서버가 같은 도메인(HTTPS)이라 CORS 설정이 필요 없고, TLS 인증서도 자동 발급/갱신됩니다.
+- 서버는 외부에 포트를 노출하지 않고 Caddy를 통해서만 접근 가능합니다.
+- **coturn**은 Docker host network + certbot이 발급한 자체 TLS 인증서(`turns:`)로 동작하며, 인증서 갱신 시 자동 재시작되도록 훅이 포함되어 있습니다.
+- 도메인/인증서 없이 구성 파일만 미리 점검하고 싶다면 `deploy/DEPLOY.md` 맨 아래 "로컬에서 이 구성을 미리 점검하는 법" 참고 (`docker compose config`, `caddy validate`, `systemd-analyze verify`로 이미지 pull 없이 검증 가능).
 
 ## 다음 단계 제안
 
@@ -94,3 +97,4 @@ npm run smoke-test
 2. 맵 데이터를 JSON 파일 업로드/에디터로 관리 (타일/오브젝트 배치 UI)
 3. 오브젝트 상호작용 이벤트(키 입력 시 URL 팝업, iframe 임베드 등) 추가
 4. Redis adapter로 Socket.IO 수평 확장 (다중 룸/다중 서버 인스턴스)
+5. CI에서 `docker build`(서버/Caddy 이미지)까지 자동 검증 (이 세션은 네트워크 정책상 Docker Hub pull이 막혀 있어 이미지 빌드 자체는 실행하지 못하고 설정 파일 레벨로만 검증함)

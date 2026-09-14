@@ -1,0 +1,68 @@
+# Production stack: Caddy (TLS + static client + reverse proxy) + the
+# Socket.IO server + coturn (TURN, TLS). Run with:
+#
+#   docker compose -f docker-compose.prod.yml --env-file server/.env.production up -d --build
+#
+# See deploy/DEPLOY.md for the full one-time VPS setup (DNS, firewall, the
+# certbot cert coturn needs, systemd unit).
+
+services:
+  caddy:
+    build:
+      context: .
+      dockerfile: deploy/caddy.Dockerfile
+    container_name: zep-mini-mvp-caddy
+    restart: unless-stopped
+    env_file:
+      - server/.env.production
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - server
+
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: zep-mini-mvp-server
+    restart: unless-stopped
+    env_file:
+      - server/.env.production
+    # No published ports: only reachable through the caddy reverse proxy,
+    # over the default compose network, as "server:3001".
+
+  # TURN relay. Uses host networking rather than `ports:` — the standard
+  # recommendation for coturn, since it avoids Docker NAT-translating the
+  # wide UDP relay port range and lets coturn see the host's real public
+  # IP directly. Requires a Linux Docker host (true for virtually every VPS).
+  coturn:
+    image: coturn/coturn:4.6.2
+    container_name: zep-mini-mvp-coturn
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - server/.env.production
+    volumes:
+      - ./turnserver.prod.conf:/etc/coturn/turnserver.conf:ro
+      # Certbot's `live/<domain>` dir is a set of symlinks into `archive/`,
+      # so the whole /etc/letsencrypt tree must be mounted for them to resolve.
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        if [ -z "$$TURN_SECRET" ] || [ -z "$$TURN_DOMAIN" ]; then
+          echo "TURN_SECRET/TURN_DOMAIN missing — check server/.env.production" >&2;
+          exit 1;
+        fi;
+        exec turnserver -c /etc/coturn/turnserver.conf \
+          --static-auth-secret="$$TURN_SECRET" \
+          --cert="/etc/letsencrypt/live/$$TURN_DOMAIN/fullchain.pem" \
+          --pkey="/etc/letsencrypt/live/$$TURN_DOMAIN/privkey.pem"
+
+volumes:
+  caddy_data:
+  caddy_config:

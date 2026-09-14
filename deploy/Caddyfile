@@ -1,0 +1,23 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$APP_DOMAIN} {
+	encode gzip
+
+	# Socket.IO (game state + WebRTC signaling) — same origin as the static
+	# site, so the browser needs no CORS config and firewalls see one HTTPS port.
+	handle /socket.io/* {
+		reverse_proxy server:3001
+	}
+
+	handle /health {
+		reverse_proxy server:3001
+	}
+
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

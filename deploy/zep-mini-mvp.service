@@ -1,0 +1,16 @@
+[Unit]
+Description=ZEP mini MVP (Caddy + server + coturn) via Docker Compose
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/zep-mini-mvp
+ExecStart=/usr/bin/docker compose -f docker-compose.prod.yml --env-file server/.env.production up -d --build
+ExecStop=/usr/bin/docker compose -f docker-compose.prod.yml --env-file server/.env.production down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
