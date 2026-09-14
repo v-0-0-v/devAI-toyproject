@@ -56,6 +56,7 @@ export class VideoChat {
       onRemoteStream: (peerId, stream) => this.showRemoteStream(peerId, stream),
       onCallEnded: (peerId) => this.removeTile(peerId),
     });
+    this.webrtc.setIceServers(payload.iceServers);
     this.webrtc.setLocalStream(this.localStream);
   }
 

@@ -17,6 +17,7 @@ export interface InitPayload {
     tileSize: number;
     walls: number[][];
   };
+  iceServers: RTCIceServer[];
 }
 
 export interface MovedPayload {

@@ -8,6 +8,12 @@ export interface Player {
   y: number;
 }
 
+export interface IceServerConfig {
+  urls: string | string[];
+  username?: string;
+  credential?: string;
+}
+
 export interface InitPayload {
   selfId: string;
   players: Record<string, Player>;
@@ -17,6 +23,7 @@ export interface InitPayload {
     tileSize: number;
     walls: number[][];
   };
+  iceServers: IceServerConfig[];
 }
 
 export interface ProximityJoinedPayload {

@@ -1,0 +1,25 @@
+services:
+  coturn:
+    image: coturn/coturn:4.6.2
+    container_name: zep-mini-mvp-coturn
+    restart: unless-stopped
+    env_file:
+      - server/.env
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+      - "49160-49200:49160-49200/udp"
+    volumes:
+      - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
+    # `$$TURN_SECRET` (escaped so Docker Compose leaves it alone) is expanded by
+    # the container's own shell from the TURN_SECRET injected via `env_file`
+    # above — not by Compose itself, which only reads variables for `${...}`
+    # substitution from its own environment/.env, not from `env_file:`.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        if [ -z "$$TURN_SECRET" ]; then
+          echo "TURN_SECRET is not set — copy server/.env.example to server/.env and fill it in." >&2;
+          exit 1;
+        fi;
+        exec turnserver -c /etc/coturn/turnserver.conf --static-auth-secret="$$TURN_SECRET"

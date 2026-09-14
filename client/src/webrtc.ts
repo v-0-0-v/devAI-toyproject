@@ -1,6 +1,6 @@
 import type { Network } from "./network";
 
-const ICE_SERVERS: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
+const DEFAULT_ICE_SERVERS: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
 
 export interface WebRTCCallbacks {
   onRemoteStream: (peerId: string, stream: MediaStream) => void;
@@ -18,6 +18,7 @@ export interface WebRTCCallbacks {
 export class WebRTCManager {
   private peers = new Map<string, RTCPeerConnection>();
   private localStream: MediaStream | null = null;
+  private iceServers: RTCIceServer[] = DEFAULT_ICE_SERVERS;
 
   constructor(
     private network: Network,
@@ -29,6 +30,12 @@ export class WebRTCManager {
     this.localStream = stream;
   }
 
+  /** Server-provided STUN/TURN list (see server/src/turn.ts). Falls back to
+   * public STUN-only if the server didn't send any (e.g. empty array). */
+  setIceServers(servers: RTCIceServer[]) {
+    if (servers.length > 0) this.iceServers = servers;
+  }
+
   private isInitiator(peerId: string): boolean {
     return this.selfId < peerId;
   }
@@ -37,7 +44,7 @@ export class WebRTCManager {
     const existing = this.peers.get(peerId);
     if (existing) return existing;
 
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
     this.peers.set(peerId, pc);
 
     if (this.localStream) {

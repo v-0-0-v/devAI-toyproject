@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { createServer } from "node:http";
@@ -11,6 +12,7 @@ import {
   isWalkable,
   randomSpawnPoint,
 } from "./map.js";
+import { buildIceServers } from "./turn.js";
 import type {
   Direction,
   Player,
@@ -116,6 +118,7 @@ io.on("connection", (socket) => {
       selfId: socket.id,
       players: { ...players },
       map: { width: MAP_WIDTH, height: MAP_HEIGHT, tileSize: TILE_SIZE, walls: WALLS },
+      iceServers: buildIceServers(socket.id),
     };
     socket.emit("init", initPayload);
     socket.broadcast.emit("player-joined", player);

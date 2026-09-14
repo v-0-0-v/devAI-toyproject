@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { io } from "socket.io-client";
 
 const a = io("http://localhost:3001", { transports: ["websocket"] });
@@ -82,6 +83,16 @@ async function main() {
   }
   await wait(800);
 
+  // --- iceServers shape: STUN always present; a turn: entry is present iff
+  // TURN_SECRET/TURN_URLS are configured (see server/.env). Either way this
+  // must never be empty, or the client would have no ICE servers at all. ---
+  const iceServers = aInit?.iceServers ?? [];
+  const hasStun = iceServers.some((s) => String(s.urls).startsWith("stun:"));
+  const turnEntry = iceServers.find((s) =>
+    (Array.isArray(s.urls) ? s.urls : [s.urls]).some((u) => String(u).startsWith("turn:"))
+  );
+  console.log("iceServers:", iceServers);
+
   const results = {
     aInit: Boolean(aInit),
     bSawJoin: Boolean(bSawJoin),
@@ -91,6 +102,11 @@ async function main() {
     bSawIceCandidate: bSawIceCandidate?.candidate?.candidate === "test-candidate",
     aSawProximityJoin: aSawProximityJoin?.peerId === b.id,
     bSawProximityJoin: bSawProximityJoin?.peerId === a.id,
+    iceServersHasStun: hasStun,
+    // Only asserted when TURN is actually configured, so this test also
+    // passes on a fresh checkout with no server/.env (STUN-only fallback).
+    turnCredentialShape:
+      !process.env.TURN_SECRET || (Boolean(turnEntry?.username) && Boolean(turnEntry?.credential)),
   };
   console.log("results:", results);
 
