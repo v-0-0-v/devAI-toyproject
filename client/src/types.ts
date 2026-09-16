@@ -53,3 +53,18 @@ export interface RelayedIceCandidatePayload {
   from: string;
   candidate: RTCIceCandidateInit;
 }
+
+export type ChatScope = "global" | "nearby";
+
+export interface ChatBroadcastPayload {
+  id: string;
+  nickname: string;
+  scope: ChatScope;
+  text: string;
+  ts: number;
+}
+
+export interface ReactionBroadcastPayload {
+  id: string;
+  emoji: string;
+}

@@ -1,5 +1,7 @@
 import { io, Socket } from "socket.io-client";
 import type {
+  ChatBroadcastPayload,
+  ChatScope,
   Direction,
   InitPayload,
   LeftPayload,
@@ -7,6 +9,7 @@ import type {
   Player,
   ProximityJoinedPayload,
   ProximityLeftPayload,
+  ReactionBroadcastPayload,
   RelayedAnswerPayload,
   RelayedIceCandidatePayload,
   RelayedOfferPayload,
@@ -30,6 +33,8 @@ interface ServerEvents {
   "webrtc-offer": RelayedOfferPayload;
   "webrtc-answer": RelayedAnswerPayload;
   "webrtc-ice-candidate": RelayedIceCandidatePayload;
+  "chat-message": ChatBroadcastPayload;
+  reaction: ReactionBroadcastPayload;
 }
 
 type Listener<T> = (payload: T) => void;
@@ -44,6 +49,8 @@ const EVENT_NAMES = [
   "webrtc-offer",
   "webrtc-answer",
   "webrtc-ice-candidate",
+  "chat-message",
+  "reaction",
 ] as const satisfies readonly (keyof ServerEvents)[];
 
 /**
@@ -63,6 +70,8 @@ export class Network {
     "webrtc-offer": new Set(),
     "webrtc-answer": new Set(),
     "webrtc-ice-candidate": new Set(),
+    "chat-message": new Set(),
+    reaction: new Set(),
   };
 
   constructor(nickname: string) {
@@ -103,5 +112,13 @@ export class Network {
 
   sendIceCandidate(to: string, candidate: RTCIceCandidateInit) {
     this.socket.emit("webrtc-ice-candidate", { to, candidate });
+  }
+
+  sendChatMessage(scope: ChatScope, text: string) {
+    this.socket.emit("chat-message", { scope, text });
+  }
+
+  sendReaction(emoji: string) {
+    this.socket.emit("reaction", { emoji });
   }
 }

@@ -20,6 +20,9 @@ import type {
   OfferPayload,
   AnswerPayload,
   IceCandidatePayload,
+  ChatMessagePayload,
+  ChatBroadcastPayload,
+  ReactionPayload,
 } from "./types.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
@@ -83,6 +86,17 @@ function endAllCallsFor(playerId: string) {
     io.to(other).emit("proximity-left", { peerId: playerId });
   }
 }
+
+function getNearbyPlayerIds(playerId: string): string[] {
+  const player = players[playerId];
+  if (!player) return [];
+  return Object.values(players)
+    .filter((other) => other.id !== playerId && isNear(player, other))
+    .map((other) => other.id);
+}
+
+const CHAT_MAX_LEN = 200;
+const REACTION_EMOJIS = new Set(["👍", "❤️", "😂", "😮", "👏", "🎉"]);
 
 const DIRECTION_DELTA: Record<Direction, { dx: number; dy: number }> = {
   up: { dx: 0, dy: -1 },
@@ -157,6 +171,43 @@ io.on("connection", (socket) => {
   socket.on("webrtc-ice-candidate", ({ to, candidate }: IceCandidatePayload) => {
     if (typeof to !== "string") return;
     io.to(to).emit("webrtc-ice-candidate", { from: socket.id, candidate });
+  });
+
+  // Chat: "global" reaches everyone, "nearby" reaches only players currently
+  // within PROXIMITY_RADIUS (mirrors who'd be in a video call with the sender).
+  socket.on("chat-message", (raw: unknown) => {
+    const player = players[socket.id];
+    if (!player) return;
+
+    const payload = raw as Partial<ChatMessagePayload> | null;
+    if (!payload || (payload.scope !== "global" && payload.scope !== "nearby")) return;
+    const text = typeof payload.text === "string" ? payload.text.trim().slice(0, CHAT_MAX_LEN) : "";
+    if (!text) return;
+
+    const broadcast: ChatBroadcastPayload = {
+      id: socket.id,
+      nickname: player.nickname,
+      scope: payload.scope,
+      text,
+      ts: Date.now(),
+    };
+
+    if (payload.scope === "global") {
+      io.emit("chat-message", broadcast);
+    } else {
+      socket.emit("chat-message", broadcast);
+      for (const peerId of getNearbyPlayerIds(socket.id)) {
+        io.to(peerId).emit("chat-message", broadcast);
+      }
+    }
+  });
+
+  socket.on("reaction", (raw: unknown) => {
+    if (!players[socket.id]) return;
+    const payload = raw as Partial<ReactionPayload> | null;
+    const emoji = payload?.emoji;
+    if (typeof emoji !== "string" || !REACTION_EMOJIS.has(emoji)) return;
+    io.emit("reaction", { id: socket.id, emoji });
   });
 
   socket.on("disconnect", () => {

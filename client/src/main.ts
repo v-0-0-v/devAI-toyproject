@@ -2,6 +2,8 @@ import Phaser from "phaser";
 import { GameScene } from "./scenes/GameScene";
 import { Network } from "./network";
 import { VideoChat } from "./videoChat";
+import { Chat } from "./chat";
+import { TouchControls } from "./touchControls";
 
 const loginEl = document.querySelector<HTMLDivElement>("#login")!;
 const formEl = document.querySelector<HTMLFormElement>("#login-form")!;
@@ -21,7 +23,9 @@ formEl.addEventListener("submit", async (event) => {
 
   const network = new Network(nickname);
   new VideoChat(network, localStream);
-  startGame(network);
+  new Chat(network);
+  const touchControls = new TouchControls();
+  startGame(network, touchControls);
 });
 
 async function requestLocalMedia(): Promise<MediaStream | null> {
@@ -34,7 +38,7 @@ async function requestLocalMedia(): Promise<MediaStream | null> {
   }
 }
 
-function startGame(network: Network) {
+function startGame(network: Network, touchControls: TouchControls) {
   const game = new Phaser.Game({
     type: Phaser.AUTO,
     parent: "app",
@@ -45,5 +49,5 @@ function startGame(network: Network) {
     scene: [],
   });
 
-  game.scene.add("game", GameScene, true, { network });
+  game.scene.add("game", GameScene, true, { network, touchControls });
 }

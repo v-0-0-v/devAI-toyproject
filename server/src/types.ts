@@ -51,3 +51,29 @@ export interface IceCandidatePayload {
   to: string;
   candidate: unknown;
 }
+
+// "global" reaches every player in the map; "nearby" reaches only players
+// currently within PROXIMITY_RADIUS of the sender (same radius as video calls).
+export type ChatScope = "global" | "nearby";
+
+export interface ChatMessagePayload {
+  scope: ChatScope;
+  text: string;
+}
+
+export interface ChatBroadcastPayload {
+  id: string;
+  nickname: string;
+  scope: ChatScope;
+  text: string;
+  ts: number;
+}
+
+export interface ReactionPayload {
+  emoji: string;
+}
+
+export interface ReactionBroadcastPayload {
+  id: string;
+  emoji: string;
+}

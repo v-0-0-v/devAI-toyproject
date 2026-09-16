@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import type { Network } from "../network";
+import type { TouchControls } from "../touchControls";
 import type { Direction, InitPayload, LeftPayload, MovedPayload, Player } from "../types";
 
 interface PlayerVisual {
@@ -12,8 +13,20 @@ interface PlayerVisual {
 
 const MOVE_DURATION_MS = 110;
 
+// Digit-key -> emoji. Must match the server's REACTION_EMOJIS allowlist
+// (server/src/index.ts) or the server will silently drop the reaction.
+const REACTION_KEYS: Record<string, string> = {
+  ONE: "👍",
+  TWO: "❤️",
+  THREE: "😂",
+  FOUR: "😮",
+  FIVE: "👏",
+  SIX: "🎉",
+};
+
 export class GameScene extends Phaser.Scene {
   private network!: Network;
+  private touchControls: TouchControls | null = null;
   private tileSize = 32;
   private mapWidth = 0;
   private mapHeight = 0;
@@ -27,18 +40,53 @@ export class GameScene extends Phaser.Scene {
     super("game");
   }
 
-  init(data: { network: Network }) {
+  init(data: { network: Network; touchControls?: TouchControls }) {
     this.network = data.network;
+    this.touchControls = data.touchControls ?? null;
   }
 
   create() {
     this.cursors = this.input.keyboard!.createCursorKeys();
     this.wasd = this.input.keyboard!.addKeys("W,A,S,D") as typeof this.wasd;
 
+    for (const [key, emoji] of Object.entries(REACTION_KEYS)) {
+      this.input.keyboard!.on(`keydown-${key}`, () => {
+        if (this.isTypingInInput()) return;
+        this.network.sendReaction(emoji);
+      });
+    }
+
     this.network.on("init", (payload) => this.handleInit(payload));
     this.network.on("player-joined", (player) => this.spawnPlayer(player));
     this.network.on("player-moved", (payload) => this.movePlayer(payload));
     this.network.on("player-left", (payload) => this.removePlayer(payload));
+    this.network.on("reaction", (payload) => this.showReaction(payload.id, payload.emoji));
+  }
+
+  // While a text input (chat, nickname, ...) is focused, movement/reaction
+  // keys must not fire — otherwise typing "w" or "1" in chat would also
+  // move the avatar or send a reaction.
+  private isTypingInInput(): boolean {
+    const tag = document.activeElement?.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA";
+  }
+
+  private showReaction(playerId: string, emoji: string) {
+    const visual = this.visuals.get(playerId);
+    if (!visual) return;
+
+    const bubble = this.add.text(0, -this.tileSize / 2 - 26, emoji, { fontSize: "22px" });
+    bubble.setOrigin(0.5, 1);
+    visual.container.add(bubble);
+
+    this.tweens.add({
+      targets: bubble,
+      y: bubble.y - 18,
+      alpha: 0,
+      duration: 1200,
+      ease: "Cubic.easeOut",
+      onComplete: () => bubble.destroy(),
+    });
   }
 
   private handleInit(payload: InitPayload) {
@@ -133,12 +181,14 @@ export class GameScene extends Phaser.Scene {
 
   update() {
     if (this.moveCooldown) return;
+    if (this.isTypingInInput()) return;
 
     let direction: Direction | null = null;
     if (this.cursors.left.isDown || this.wasd.A.isDown) direction = "left";
     else if (this.cursors.right.isDown || this.wasd.D.isDown) direction = "right";
     else if (this.cursors.up.isDown || this.wasd.W.isDown) direction = "up";
     else if (this.cursors.down.isDown || this.wasd.S.isDown) direction = "down";
+    else direction = this.touchControls?.getDirection() ?? null;
 
     if (direction) {
       this.moveCooldown = true;

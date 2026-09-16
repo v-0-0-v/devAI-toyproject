@@ -19,6 +19,12 @@ export class WebRTCManager {
   private peers = new Map<string, RTCPeerConnection>();
   private localStream: MediaStream | null = null;
   private iceServers: RTCIceServer[] = DEFAULT_ICE_SERVERS;
+  // The video track currently being sent (camera by default, screen while
+  // sharing). Swapped in-place via RTCRtpSender.replaceTrack(), which — unlike
+  // adding a second track — needs no renegotiation, so screen share can toggle
+  // mid-call without a fresh offer/answer round trip.
+  private cameraVideoTrack: MediaStreamTrack | null = null;
+  private screenVideoTrack: MediaStreamTrack | null = null;
 
   constructor(
     private network: Network,
@@ -28,6 +34,26 @@ export class WebRTCManager {
 
   setLocalStream(stream: MediaStream | null) {
     this.localStream = stream;
+    this.cameraVideoTrack = stream?.getVideoTracks()[0] ?? null;
+  }
+
+  /** Replaces the outgoing video track (camera -> screen) on every active peer
+   * connection, and on any created afterwards. */
+  async startScreenShare(track: MediaStreamTrack) {
+    this.screenVideoTrack = track;
+    await this.replaceVideoTrackOnAllPeers(track);
+  }
+
+  async stopScreenShare() {
+    this.screenVideoTrack = null;
+    await this.replaceVideoTrackOnAllPeers(this.cameraVideoTrack);
+  }
+
+  private async replaceVideoTrackOnAllPeers(track: MediaStreamTrack | null) {
+    for (const pc of this.peers.values()) {
+      const sender = pc.getSenders().find((s) => s.track?.kind === "video");
+      if (sender) await sender.replaceTrack(track);
+    }
   }
 
   /** Server-provided STUN/TURN list (see server/src/turn.ts). Falls back to
@@ -49,7 +75,10 @@ export class WebRTCManager {
 
     if (this.localStream) {
       for (const track of this.localStream.getTracks()) {
-        pc.addTrack(track, this.localStream);
+        // A peer that joins while screen sharing is active should receive the
+        // screen track from the start, not the camera.
+        const outgoing = track.kind === "video" && this.screenVideoTrack ? this.screenVideoTrack : track;
+        pc.addTrack(outgoing, this.localStream);
       }
     }
 

@@ -11,6 +11,7 @@ function wait(ms) {
 let aInit, bSawJoin, aSawMove;
 let bSawOffer, aSawAnswer, bSawIceCandidate;
 let aSawProximityJoin, bSawProximityJoin;
+let aSawGlobalChat, bSawGlobalChat, aSawNearbyChat, bSawNearbyChat, aSawReaction, bSawReaction;
 
 a.on("init", (payload) => {
   aInit = payload;
@@ -51,6 +52,22 @@ b.on("proximity-joined", (payload) => {
   console.log("B saw proximity-joined:", payload);
 });
 
+a.on("chat-message", (payload) => {
+  if (payload.scope === "global") aSawGlobalChat = payload;
+  else aSawNearbyChat = payload;
+});
+b.on("chat-message", (payload) => {
+  if (payload.scope === "global") bSawGlobalChat = payload;
+  else bSawNearbyChat = payload;
+});
+
+a.on("reaction", (payload) => {
+  aSawReaction = payload;
+});
+b.on("reaction", (payload) => {
+  bSawReaction = payload;
+});
+
 a.on("connect", () => a.emit("join", "Alice"));
 
 async function main() {
@@ -83,6 +100,17 @@ async function main() {
   }
   await wait(800);
 
+  // --- chat: global reaches both regardless of position; nearby reaches both
+  // only because the proximity walk above already put them next to each other ---
+  a.emit("chat-message", { scope: "global", text: "hello everyone" });
+  await wait(200);
+  a.emit("chat-message", { scope: "nearby", text: "hey neighbor" });
+  await wait(200);
+
+  // --- reaction: broadcast to all players, including the sender ---
+  b.emit("reaction", { emoji: "👍" });
+  await wait(200);
+
   // --- iceServers shape: STUN always present; a turn: entry is present iff
   // TURN_SECRET/TURN_URLS are configured (see server/.env). Either way this
   // must never be empty, or the client would have no ICE servers at all. ---
@@ -102,6 +130,12 @@ async function main() {
     bSawIceCandidate: bSawIceCandidate?.candidate?.candidate === "test-candidate",
     aSawProximityJoin: aSawProximityJoin?.peerId === b.id,
     bSawProximityJoin: bSawProximityJoin?.peerId === a.id,
+    aSawGlobalChat: aSawGlobalChat?.text === "hello everyone",
+    bSawGlobalChat: bSawGlobalChat?.text === "hello everyone",
+    aSawNearbyChat: aSawNearbyChat?.text === "hey neighbor",
+    bSawNearbyChat: bSawNearbyChat?.text === "hey neighbor",
+    aSawReaction: aSawReaction?.emoji === "👍" && aSawReaction.id === b.id,
+    bSawReaction: bSawReaction?.emoji === "👍" && bSawReaction.id === b.id,
     iceServersHasStun: hasStun,
     // Only asserted when TURN is actually configured, so this test also
     // passes on a fresh checkout with no server/.env (STUN-only fallback).
