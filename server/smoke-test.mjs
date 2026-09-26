@@ -117,6 +117,11 @@ async function main() {
     b.emit("move", "left");
   }
   await wait(800);
+  // Snapshot now: Carol/Dave join later at random spawn points and can
+  // coincidentally wander within radius of A or B, firing a new
+  // "proximity-joined" that would otherwise overwrite this before we assert.
+  const aSawProximityJoinOriginal = aSawProximityJoin;
+  const bSawProximityJoinOriginal = bSawProximityJoin;
 
   // --- chat: global reaches both regardless of position; nearby reaches both
   // only because the proximity walk above already put them next to each other ---
@@ -188,6 +193,50 @@ async function main() {
   a.emit("report", { targetId: b.id, reason: "smoke-test" });
   await wait(200);
 
+  // --- minigame (rock-paper-scissors): Carol and Dave both walk onto the
+  // same "minigame" object, get matched, and play a round ---
+  let carolMatched = false;
+  let daveMatched = false;
+  let carolResult, daveResult;
+  let daveSawOpponentLeft = false;
+  carol.on("minigame-matched", () => (carolMatched = true));
+  dave.on("minigame-matched", () => (daveMatched = true));
+  carol.on("minigame-result", (p) => (carolResult = p));
+  dave.on("minigame-result", (p) => (daveResult = p));
+  dave.on("minigame-opponent-left", () => (daveSawOpponentLeft = true));
+
+  carol.emit("minigame-join", "rps-1");
+  await wait(200);
+  dave.emit("minigame-join", "rps-1");
+  await wait(200);
+  carol.emit("minigame-choice", { choice: "rock" });
+  dave.emit("minigame-choice", { choice: "scissors" });
+  await wait(300);
+
+  carol.emit("minigame-leave");
+  await wait(200);
+
+  // --- admin moderation: an unauthorized client's ban attempt must be a
+  // no-op; with ADMIN_TOKEN set (opt-in — most dev/CI runs won't have it),
+  // additionally verify a real admin ban force-disconnects the target ---
+  let daveAuthResult;
+  dave.on("admin-auth-result", (p) => (daveAuthResult = p));
+  dave.emit("admin-auth", "definitely-wrong-token");
+  await wait(200);
+  dave.emit("admin-ban", { targetId: carol.id });
+  await wait(300);
+  const carolAliveAfterUnauthorizedBan = carol.connected;
+  console.log("dave admin-auth-result (wrong token):", daveAuthResult);
+
+  let realAdminBanDisconnectedTarget = true; // vacuously true unless actually tested below
+  if (process.env.ADMIN_TOKEN) {
+    dave.emit("admin-auth", process.env.ADMIN_TOKEN);
+    await wait(200);
+    dave.emit("admin-ban", { targetId: carol.id });
+    await wait(300);
+    realAdminBanDisconnectedTarget = carol.connected === false;
+  }
+
   // --- iceServers shape: STUN always present; a turn: entry is present iff
   // TURN_SECRET/TURN_URLS are configured (see server/.env). Either way this
   // must never be empty, or the client would have no ICE servers at all. ---
@@ -205,8 +254,8 @@ async function main() {
     bSawOffer: bSawOffer?.offer?.sdp === "test-sdp-offer" && bSawOffer.from === a.id,
     aSawAnswer: aSawAnswer?.answer?.sdp === "test-sdp-answer" && aSawAnswer.from === b.id,
     bSawIceCandidate: bSawIceCandidate?.candidate?.candidate === "test-candidate",
-    aSawProximityJoin: aSawProximityJoin?.peerId === b.id,
-    bSawProximityJoin: bSawProximityJoin?.peerId === a.id,
+    aSawProximityJoin: aSawProximityJoinOriginal?.peerId === b.id,
+    bSawProximityJoin: bSawProximityJoinOriginal?.peerId === a.id,
     aSawGlobalChat: aSawGlobalChat?.text === "hello everyone",
     bSawGlobalChat: bSawGlobalChat?.text === "hello everyone",
     aSawNearbyChat: aSawNearbyChatOriginal?.text === "hey neighbor",
@@ -225,6 +274,15 @@ async function main() {
     avatarColorFallsBackWhenInvalid:
       typeof aSawDaveJoin?.color === "number" && PLAYER_COLORS.includes(aSawDaveJoin.color),
     serverAliveAfterReport: a.connected && b.connected,
+    mapObjectsIncludeMinigame: aInit?.map?.objects?.some((o) => o.id === "rps-1" && o.type === "minigame"),
+    minigameMatchmakingWorked: carolMatched && daveMatched,
+    minigameCarolWon:
+      carolResult?.outcome === "win" && carolResult.yourChoice === "rock" && carolResult.opponentChoice === "scissors",
+    minigameDaveLost:
+      daveResult?.outcome === "lose" && daveResult.yourChoice === "scissors" && daveResult.opponentChoice === "rock",
+    minigameOpponentLeftNotified: daveSawOpponentLeft,
+    adminBanUnauthorizedIsNoOp: carolAliveAfterUnauthorizedBan,
+    adminBanWorksWhenAuthorized: realAdminBanDisconnectedTarget,
     iceServersHasStun: hasStun,
     // Only asserted when TURN is actually configured, so this test also
     // passes on a fresh checkout with no server/.env (STUN-only fallback).

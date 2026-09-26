@@ -5,14 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && cp src/mapdata.json dist/mapdata.json",
     "start": "node dist/index.js",
     "smoke-test": "node smoke-test.mjs"
   },
   "dependencies": {
+    "@socket.io/redis-adapter": "^8.3.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "ioredis": "^6.0.0",
     "socket.io": "^4.8.1"
   },
   "devDependencies": {

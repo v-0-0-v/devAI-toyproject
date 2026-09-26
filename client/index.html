@@ -137,6 +137,40 @@
       }
       #whiteboard-canvas { background: #111827; border-radius: 6px; display: block; touch-action: none; }
       #youtube-frame { width: 320px; height: 180px; border: 0; border-radius: 6px; display: block; }
+
+      #minigame-panel {
+        position: fixed; top: 60px; left: 50%; transform: translateX(-50%); z-index: 7;
+        background: #1f2937ee; border: 1px solid #374151; border-radius: 10px;
+        font-family: system-ui, sans-serif; color: #e5e7eb; padding: 12px;
+        width: 220px; text-align: center;
+      }
+      #minigame-panel h3 { margin: 0 0 6px; font-size: 13px; }
+      #minigame-status { font-size: 12px; color: #9ca3af; margin-bottom: 8px; min-height: 16px; }
+      #minigame-choices { display: flex; gap: 6px; justify-content: center; margin-bottom: 8px; }
+      #minigame-choices button {
+        border: none; border-radius: 6px; background: #374151; color: #fff; cursor: pointer;
+        font-size: 12px; padding: 6px 8px;
+      }
+      #minigame-choices button:hover { background: #3b82f6; }
+      #minigame-result { font-size: 12px; color: #f9fafb; word-break: break-word; }
+
+      #admin-panel {
+        position: fixed; top: 10px; left: 10px; z-index: 8;
+        background: #1f2937ee; border: 1px solid #ef4444; border-radius: 10px;
+        font-family: system-ui, sans-serif; color: #e5e7eb; padding: 10px;
+        width: 200px; max-height: 60vh; overflow-y: auto;
+      }
+      #admin-panel h3 { margin: 0 0 6px; font-size: 12px; color: #f87171; }
+      #admin-status { font-size: 11px; color: #9ca3af; margin-bottom: 6px; }
+      .admin-row {
+        display: flex; justify-content: space-between; align-items: center;
+        font-size: 12px; padding: 3px 0; gap: 6px;
+      }
+      .admin-row button {
+        border: none; border-radius: 4px; background: #ef4444; color: #fff; cursor: pointer;
+        font-size: 11px; padding: 3px 6px;
+      }
+      .admin-row button:disabled { background: #6b7280; cursor: default; }
     </style>
   </head>
   <body>
@@ -204,6 +238,21 @@
           title="같이 보기"
         ></iframe>
       </div>
+    </div>
+    <div id="minigame-panel" hidden>
+      <h3>✂️ 가위바위보</h3>
+      <div id="minigame-status"></div>
+      <div id="minigame-choices" hidden>
+        <button type="button" data-choice="rock">✊ 바위</button>
+        <button type="button" data-choice="paper">✋ 보</button>
+        <button type="button" data-choice="scissors">✌️ 가위</button>
+      </div>
+      <div id="minigame-result"></div>
+    </div>
+    <div id="admin-panel" hidden>
+      <h3>🛡️ 관리자 모드</h3>
+      <div id="admin-status"></div>
+      <div id="admin-player-list"></div>
     </div>
     <div id="hint" hidden>방향키/WASD 이동 · 숫자 1~6 리액션 · 근처 대화는 자동 화상채팅</div>
     <script type="module" src="/src/main.ts"></script>

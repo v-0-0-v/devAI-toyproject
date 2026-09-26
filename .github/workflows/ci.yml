@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Build + smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install server deps
+        working-directory: server
+        run: npm ci
+
+      - name: Build server
+        working-directory: server
+        run: npm run build
+
+      - name: Start server
+        working-directory: server
+        run: |
+          node dist/index.js &
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:3001/health && exit 0
+            sleep 1
+          done
+          echo "server never became healthy" >&2
+          exit 1
+
+      - name: Run server smoke test
+        working-directory: server
+        run: npm run smoke-test
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install client deps
+        working-directory: client
+        run: npm ci
+
+      - name: Typecheck + build client
+        working-directory: client
+        run: npm run build
+
+  docker-build:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build server image
+        run: docker build -t zep-mini-mvp-server -f server/Dockerfile server
+
+      - name: Build Caddy/client image
+        run: docker build -t zep-mini-mvp-caddy -f deploy/caddy.Dockerfile .
+
+      - name: Validate production compose config
+        run: |
+          cp server/.env.production.example server/.env.production
+          docker compose -f docker-compose.prod.yml --env-file server/.env.production config >/dev/null

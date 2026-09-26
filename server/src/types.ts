@@ -25,7 +25,7 @@ export interface RoomZone {
 
 export interface MapObject {
   id: string;
-  type: "whiteboard" | "youtube";
+  type: "whiteboard" | "youtube" | "minigame";
   x: number;
   y: number;
   videoId?: string;
@@ -119,4 +119,32 @@ export interface WhiteboardStroke {
 export interface ReportPayload {
   targetId: string;
   reason?: string;
+}
+
+export type RpsChoice = "rock" | "paper" | "scissors";
+
+export interface MinigameWaitingPayload {
+  objectId: string;
+}
+
+export interface MinigameMatchedPayload {
+  objectId: string;
+}
+
+export interface MinigameChoicePayload {
+  choice: RpsChoice;
+}
+
+export interface MinigameResultPayload {
+  yourChoice: RpsChoice;
+  opponentChoice: RpsChoice;
+  outcome: "win" | "lose" | "draw";
+}
+
+export interface AdminAuthResultPayload {
+  ok: boolean;
+}
+
+export interface AdminBanPayload {
+  targetId: string;
 }

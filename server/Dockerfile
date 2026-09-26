@@ -15,6 +15,9 @@ ENV NODE_ENV=production
 COPY package*.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
+# mapdata.json ships alongside the compiled output (see map.ts's
+# import.meta.url-relative default path); MAP_DATA_PATH can override it.
+COPY --from=build /app/dist/mapdata.json ./dist/mapdata.json
 
 # node:22-alpine ships an unprivileged "node" user — no need to create one.
 USER node

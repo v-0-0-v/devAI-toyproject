@@ -6,6 +6,8 @@ import { Chat } from "./chat";
 import { TouchControls } from "./touchControls";
 import { ObjectInteraction } from "./objectInteraction";
 import { Moderation } from "./moderation";
+import { Minigame } from "./minigame";
+import { AdminPanel } from "./adminPanel";
 
 const loginEl = document.querySelector<HTMLDivElement>("#login")!;
 const formEl = document.querySelector<HTMLFormElement>("#login-form")!;
@@ -32,7 +34,17 @@ formEl.addEventListener("submit", async (event) => {
   new Chat(network, moderation);
   const touchControls = new TouchControls();
   const objectInteraction = new ObjectInteraction(network);
-  startGame(network, touchControls, objectInteraction);
+  const minigame = new Minigame(network);
+
+  network.on("admin-banned", () => {
+    alert("관리자에 의해 차단되었습니다.");
+    location.reload();
+  });
+
+  const adminToken = new URLSearchParams(location.search).get("admin");
+  if (adminToken) new AdminPanel(network, adminToken);
+
+  startGame(network, touchControls, objectInteraction, minigame);
 });
 
 async function requestLocalMedia(): Promise<MediaStream | null> {
@@ -45,7 +57,12 @@ async function requestLocalMedia(): Promise<MediaStream | null> {
   }
 }
 
-function startGame(network: Network, touchControls: TouchControls, objectInteraction: ObjectInteraction) {
+function startGame(
+  network: Network,
+  touchControls: TouchControls,
+  objectInteraction: ObjectInteraction,
+  minigame: Minigame
+) {
   const game = new Phaser.Game({
     type: Phaser.AUTO,
     parent: "app",
@@ -56,5 +73,5 @@ function startGame(network: Network, touchControls: TouchControls, objectInterac
     scene: [],
   });
 
-  game.scene.add("game", GameScene, true, { network, touchControls, objectInteraction });
+  game.scene.add("game", GameScene, true, { network, touchControls, objectInteraction, minigame });
 }

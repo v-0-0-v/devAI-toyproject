@@ -2,6 +2,7 @@ import Phaser from "phaser";
 import type { Network } from "../network";
 import type { TouchControls } from "../touchControls";
 import type { ObjectInteraction } from "../objectInteraction";
+import type { Minigame } from "../minigame";
 import type {
   Direction,
   InitPayload,
@@ -15,6 +16,7 @@ import type {
 const OBJECT_ICONS: Record<MapObject["type"], string> = {
   whiteboard: "🖊️",
   youtube: "📺",
+  minigame: "✂️",
 };
 
 interface PlayerVisual {
@@ -42,6 +44,7 @@ export class GameScene extends Phaser.Scene {
   private network!: Network;
   private touchControls: TouchControls | null = null;
   private objectInteraction: ObjectInteraction | null = null;
+  private minigame: Minigame | null = null;
   private tileSize = 32;
   private mapWidth = 0;
   private mapHeight = 0;
@@ -57,10 +60,16 @@ export class GameScene extends Phaser.Scene {
     super("game");
   }
 
-  init(data: { network: Network; touchControls?: TouchControls; objectInteraction?: ObjectInteraction }) {
+  init(data: {
+    network: Network;
+    touchControls?: TouchControls;
+    objectInteraction?: ObjectInteraction;
+    minigame?: Minigame;
+  }) {
     this.network = data.network;
     this.touchControls = data.touchControls ?? null;
     this.objectInteraction = data.objectInteraction ?? null;
+    this.minigame = data.minigame ?? null;
   }
 
   create() {
@@ -184,15 +193,21 @@ export class GameScene extends Phaser.Scene {
 
   private checkObjectInteraction(x: number | undefined, y: number | undefined) {
     const obj = x !== undefined && y !== undefined ? this.findObjectAt(x, y) : undefined;
-    if (obj) {
-      if (this.activeObject?.id !== obj.id) {
-        this.activeObject = obj;
-        this.objectInteraction?.enter(obj);
-      }
-    } else if (this.activeObject) {
-      this.activeObject = null;
-      this.objectInteraction?.leave();
-    }
+    if (obj?.id === this.activeObject?.id) return;
+
+    if (this.activeObject) this.leaveObject(this.activeObject);
+    this.activeObject = obj ?? null;
+    if (obj) this.enterObject(obj);
+  }
+
+  private enterObject(obj: MapObject) {
+    if (obj.type === "minigame") this.minigame?.enter(obj.id);
+    else this.objectInteraction?.enter(obj);
+  }
+
+  private leaveObject(obj: MapObject) {
+    if (obj.type === "minigame") this.minigame?.leave();
+    else this.objectInteraction?.leave();
   }
 
   private tileToPixel(tileX: number, tileY: number) {

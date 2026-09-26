@@ -1,10 +1,14 @@
 import { io, Socket } from "socket.io-client";
 import type {
+  AdminAuthResultPayload,
   ChatBroadcastPayload,
   ChatScope,
   Direction,
   InitPayload,
   LeftPayload,
+  MinigameMatchedPayload,
+  MinigameResultPayload,
+  MinigameWaitingPayload,
   MovedPayload,
   Player,
   ProximityJoinedPayload,
@@ -13,6 +17,7 @@ import type {
   RelayedAnswerPayload,
   RelayedIceCandidatePayload,
   RelayedOfferPayload,
+  RpsChoice,
   WhiteboardClearPayload,
   WhiteboardHistoryPayload,
   WhiteboardStroke,
@@ -41,6 +46,12 @@ interface ServerEvents {
   "whiteboard-draw": WhiteboardStroke;
   "whiteboard-history": WhiteboardHistoryPayload;
   "whiteboard-clear": WhiteboardClearPayload;
+  "minigame-waiting": MinigameWaitingPayload;
+  "minigame-matched": MinigameMatchedPayload;
+  "minigame-result": MinigameResultPayload;
+  "minigame-opponent-left": undefined;
+  "admin-auth-result": AdminAuthResultPayload;
+  "admin-banned": undefined;
 }
 
 type Listener<T> = (payload: T) => void;
@@ -60,6 +71,12 @@ const EVENT_NAMES = [
   "whiteboard-draw",
   "whiteboard-history",
   "whiteboard-clear",
+  "minigame-waiting",
+  "minigame-matched",
+  "minigame-result",
+  "minigame-opponent-left",
+  "admin-auth-result",
+  "admin-banned",
 ] as const satisfies readonly (keyof ServerEvents)[];
 
 /**
@@ -84,6 +101,12 @@ export class Network {
     "whiteboard-draw": new Set(),
     "whiteboard-history": new Set(),
     "whiteboard-clear": new Set(),
+    "minigame-waiting": new Set(),
+    "minigame-matched": new Set(),
+    "minigame-result": new Set(),
+    "minigame-opponent-left": new Set(),
+    "admin-auth-result": new Set(),
+    "admin-banned": new Set(),
   };
 
   constructor(nickname: string, color?: number) {
@@ -148,5 +171,25 @@ export class Network {
 
   sendReport(targetId: string, reason?: string) {
     this.socket.emit("report", { targetId, reason });
+  }
+
+  joinMinigame(objectId: string) {
+    this.socket.emit("minigame-join", objectId);
+  }
+
+  sendMinigameChoice(choice: RpsChoice) {
+    this.socket.emit("minigame-choice", { choice });
+  }
+
+  leaveMinigame() {
+    this.socket.emit("minigame-leave");
+  }
+
+  sendAdminAuth(token: string) {
+    this.socket.emit("admin-auth", token);
+  }
+
+  sendAdminBan(targetId: string) {
+    this.socket.emit("admin-ban", { targetId });
   }
 }
