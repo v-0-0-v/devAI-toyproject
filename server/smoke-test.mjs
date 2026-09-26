@@ -12,6 +12,10 @@ let aInit, bSawJoin, aSawMove;
 let bSawOffer, aSawAnswer, bSawIceCandidate;
 let aSawProximityJoin, bSawProximityJoin;
 let aSawGlobalChat, bSawGlobalChat, aSawNearbyChat, bSawNearbyChat, aSawReaction, bSawReaction;
+let aProximityLeftCount = 0;
+let bProximityLeftCount = 0;
+let bSawRoomCrossChat = false;
+let aWhiteboardHistory, bSawWhiteboardDraw, aSawWhiteboardClear;
 
 a.on("init", (payload) => {
   aInit = payload;
@@ -52,12 +56,16 @@ b.on("proximity-joined", (payload) => {
   console.log("B saw proximity-joined:", payload);
 });
 
+a.on("proximity-left", () => aProximityLeftCount++);
+b.on("proximity-left", () => bProximityLeftCount++);
+
 a.on("chat-message", (payload) => {
   if (payload.scope === "global") aSawGlobalChat = payload;
   else aSawNearbyChat = payload;
 });
 b.on("chat-message", (payload) => {
   if (payload.scope === "global") bSawGlobalChat = payload;
+  else if (payload.text === "should not cross the room wall") bSawRoomCrossChat = true;
   else bSawNearbyChat = payload;
 });
 
@@ -66,6 +74,16 @@ a.on("reaction", (payload) => {
 });
 b.on("reaction", (payload) => {
   bSawReaction = payload;
+});
+
+a.on("whiteboard-history", (payload) => {
+  aWhiteboardHistory = payload;
+});
+b.on("whiteboard-draw", (payload) => {
+  bSawWhiteboardDraw = payload;
+});
+a.on("whiteboard-clear", (payload) => {
+  aSawWhiteboardClear = payload;
 });
 
 a.on("connect", () => a.emit("join", "Alice"));
@@ -106,9 +124,68 @@ async function main() {
   await wait(200);
   a.emit("chat-message", { scope: "nearby", text: "hey neighbor" });
   await wait(200);
+  // Snapshot now: the room-isolation test below sends another "nearby"
+  // message later, which would otherwise overwrite these before we assert.
+  const aSawNearbyChatOriginal = aSawNearbyChat;
+  const bSawNearbyChatOriginal = bSawNearbyChat;
 
   // --- reaction: broadcast to all players, including the sender ---
   b.emit("reaction", { emoji: "👍" });
+  await wait(200);
+
+  // --- whiteboard: join, draw, clear, then re-join to confirm history reset ---
+  a.emit("whiteboard-join", "board-1");
+  await wait(200);
+  a.emit("whiteboard-draw", { boardId: "board-1", x0: 0, y0: 0, x1: 10, y1: 10, color: "#ffffff" });
+  await wait(200);
+  a.emit("whiteboard-clear", "board-1");
+  await wait(200);
+  a.emit("whiteboard-join", "board-1");
+  await wait(200);
+
+  // --- private room isolation: both are at (1,1) from the walk above. Send
+  // A into the meeting room and B to just outside its door — still within
+  // PROXIMITY_RADIUS (Chebyshev distance 3) but now in different rooms, so
+  // the existing call between them must end and nearby chat must not cross. ---
+  const toRoomInterior = [
+    "down", "down", "down", "down", "down", "down",
+    "right", "right", "right", "right", "right", "right", "right", "right", "right", "right", "right", "right", "right",
+    "down", "right", "right", "down", "down", "down",
+  ];
+  const toJustOutsideDoor = [
+    "down", "down", "down", "down", "down", "down",
+    "right", "right", "right", "right", "right", "right", "right", "right", "right", "right", "right", "right", "right",
+    "down", "right", "right",
+  ];
+  const positions = {};
+  a.on("player-moved", (p) => (positions[p.id] = p));
+  for (const dir of toRoomInterior) a.emit("move", dir);
+  for (const dir of toJustOutsideDoor) b.emit("move", dir);
+  await wait(800);
+  console.log("positions after room walk:", positions[a.id], positions[b.id]);
+
+  // A (inside the room) sends nearby chat; B (outside, room mismatch) must
+  // not receive it even though "socket.emit" would always echo it back to
+  // the sender themselves — that's why this checks B's inbox, not A's.
+  a.emit("chat-message", { scope: "nearby", text: "should not cross the room wall" });
+  await wait(300);
+
+  // --- avatar color: a valid palette color is honored, an invalid one falls
+  // back to a random palette color instead of crashing the join ---
+  const PLAYER_COLORS = [0xef4444, 0xf59e0b, 0x10b981, 0x3b82f6, 0x8b5cf6, 0xec4899];
+  const carol = io("http://localhost:3001", { transports: ["websocket"] });
+  const dave = io("http://localhost:3001", { transports: ["websocket"] });
+  let aSawCarolJoin, aSawDaveJoin;
+  a.on("player-joined", (player) => {
+    if (player.nickname === "Carol") aSawCarolJoin = player;
+    if (player.nickname === "Dave") aSawDaveJoin = player;
+  });
+  carol.on("connect", () => carol.emit("join", { nickname: "Carol", color: 0x3b82f6 }));
+  dave.on("connect", () => dave.emit("join", { nickname: "Dave", color: 999999 }));
+  await wait(500);
+
+  // --- report: server validates + logs, connection must survive ---
+  a.emit("report", { targetId: b.id, reason: "smoke-test" });
   await wait(200);
 
   // --- iceServers shape: STUN always present; a turn: entry is present iff
@@ -132,10 +209,22 @@ async function main() {
     bSawProximityJoin: bSawProximityJoin?.peerId === a.id,
     aSawGlobalChat: aSawGlobalChat?.text === "hello everyone",
     bSawGlobalChat: bSawGlobalChat?.text === "hello everyone",
-    aSawNearbyChat: aSawNearbyChat?.text === "hey neighbor",
-    bSawNearbyChat: bSawNearbyChat?.text === "hey neighbor",
+    aSawNearbyChat: aSawNearbyChatOriginal?.text === "hey neighbor",
+    bSawNearbyChat: bSawNearbyChatOriginal?.text === "hey neighbor",
     aSawReaction: aSawReaction?.emoji === "👍" && aSawReaction.id === b.id,
     bSawReaction: bSawReaction?.emoji === "👍" && bSawReaction.id === b.id,
+    whiteboardHistoryShape: Array.isArray(aWhiteboardHistory?.strokes),
+    whiteboardDrawRelayed: bSawWhiteboardDraw?.x1 === 10 && bSawWhiteboardDraw.boardId === "board-1",
+    whiteboardClearRelayed: aSawWhiteboardClear?.boardId === "board-1",
+    whiteboardHistoryResetAfterClear: aWhiteboardHistory?.strokes.length === 0,
+    // The room-crossing pair must see a proximity-left even though they're
+    // still within Chebyshev range — room mismatch alone must end the call.
+    roomIsolationEndedCall: aProximityLeftCount > 0 && bProximityLeftCount > 0,
+    roomIsolationBlocksNearbyChat: bSawRoomCrossChat === false,
+    avatarColorHonored: aSawCarolJoin?.color === 0x3b82f6,
+    avatarColorFallsBackWhenInvalid:
+      typeof aSawDaveJoin?.color === "number" && PLAYER_COLORS.includes(aSawDaveJoin.color),
+    serverAliveAfterReport: a.connected && b.connected,
     iceServersHasStun: hasStun,
     // Only asserted when TURN is actually configured, so this test also
     // passes on a fresh checkout with no server/.env (STUN-only fallback).
@@ -143,6 +232,9 @@ async function main() {
       !process.env.TURN_SECRET || (Boolean(turnEntry?.username) && Boolean(turnEntry?.credential)),
   };
   console.log("results:", results);
+
+  carol.close();
+  dave.close();
 
   const ok = Object.values(results).every(Boolean);
   console.log(ok ? "SMOKE TEST PASSED" : "SMOKE TEST FAILED");

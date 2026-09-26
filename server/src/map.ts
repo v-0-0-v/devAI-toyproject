@@ -7,6 +7,44 @@ export const MAP_HEIGHT = 15;
 // proximity chat.
 export const PROXIMITY_RADIUS = 3;
 
+// An enclosed "private room" (mirrors ZEP/Gather's soundproof meeting rooms):
+// players inside it never hear/see-call players outside it, even if within
+// PROXIMITY_RADIUS across the wall (see roomIdAt() + server/src/index.ts's
+// isNear()). Bounds are the walkable interior, inclusive.
+export interface RoomZone {
+  id: number;
+  label: string;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+export const ROOMS: RoomZone[] = [{ id: 1, label: "회의실", x0: 15, y0: 10, x1: 17, y1: 12 }];
+
+export function roomIdAt(x: number, y: number): number {
+  for (const room of ROOMS) {
+    if (x >= room.x0 && x <= room.x1 && y >= room.y0 && y <= room.y1) return room.id;
+  }
+  return 0;
+}
+
+// Fixed interactive objects players can walk onto (see server/src/index.ts's
+// whiteboard-* relay and client/src/objectInteraction.ts).
+export interface MapObject {
+  id: string;
+  type: "whiteboard" | "youtube";
+  x: number;
+  y: number;
+  videoId?: string;
+}
+
+export const OBJECTS: MapObject[] = [
+  // Inside the meeting room, so board sessions stay scoped to who's actually in there.
+  { id: "board-1", type: "whiteboard", x: 16, y: 11 },
+  { id: "tv-1", type: "youtube", x: 9, y: 3, videoId: "dQw4w9WgXcQ" },
+];
+
 // 0 = floor (walkable), 1 = wall (blocked)
 // Border walls + a couple of inner obstacles, roughly resembling a small office layout.
 export const WALLS: number[][] = (() => {
@@ -31,6 +69,23 @@ export const WALLS: number[][] = (() => {
   ];
   for (const [x, y] of desks) {
     grid[y][x] = 1;
+  }
+
+  // Wall off each room's perimeter, leaving a single door tile open at the
+  // middle of the top wall (not the bottom wall — this map's bottom border
+  // wall runs right along y = MAP_HEIGHT - 2, leaving no open tile to
+  // approach a bottom door from outside).
+  for (const room of ROOMS) {
+    for (let x = room.x0 - 1; x <= room.x1 + 1; x++) {
+      grid[room.y0 - 1][x] = 1;
+      grid[room.y1 + 1][x] = 1;
+    }
+    for (let y = room.y0 - 1; y <= room.y1 + 1; y++) {
+      grid[y][room.x0 - 1] = 1;
+      grid[y][room.x1 + 1] = 1;
+    }
+    const doorX = Math.floor((room.x0 + room.x1) / 2);
+    grid[room.y0 - 1][doorX] = 0;
   }
 
   return grid;

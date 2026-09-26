@@ -4,6 +4,8 @@ import { Network } from "./network";
 import { VideoChat } from "./videoChat";
 import { Chat } from "./chat";
 import { TouchControls } from "./touchControls";
+import { ObjectInteraction } from "./objectInteraction";
+import { Moderation } from "./moderation";
 
 const loginEl = document.querySelector<HTMLDivElement>("#login")!;
 const formEl = document.querySelector<HTMLFormElement>("#login-form")!;
@@ -15,17 +17,22 @@ formEl.addEventListener("submit", async (event) => {
   const nickname = nicknameEl.value.trim();
   if (!nickname) return;
 
+  const colorInput = formEl.querySelector<HTMLInputElement>('input[name="avatar-color"]:checked');
+  const color = colorInput ? Number(colorInput.value) : undefined;
+
   submitBtn.disabled = true;
   submitBtn.textContent = "카메라/마이크 권한 확인 중...";
   const localStream = await requestLocalMedia();
 
   loginEl.remove();
 
-  const network = new Network(nickname);
-  new VideoChat(network, localStream);
-  new Chat(network);
+  const network = new Network(nickname, color);
+  const moderation = new Moderation();
+  new VideoChat(network, localStream, moderation);
+  new Chat(network, moderation);
   const touchControls = new TouchControls();
-  startGame(network, touchControls);
+  const objectInteraction = new ObjectInteraction(network);
+  startGame(network, touchControls, objectInteraction);
 });
 
 async function requestLocalMedia(): Promise<MediaStream | null> {
@@ -38,7 +45,7 @@ async function requestLocalMedia(): Promise<MediaStream | null> {
   }
 }
 
-function startGame(network: Network, touchControls: TouchControls) {
+function startGame(network: Network, touchControls: TouchControls, objectInteraction: ObjectInteraction) {
   const game = new Phaser.Game({
     type: Phaser.AUTO,
     parent: "app",
@@ -49,5 +56,5 @@ function startGame(network: Network, touchControls: TouchControls) {
     scene: [],
   });
 
-  game.scene.add("game", GameScene, true, { network, touchControls });
+  game.scene.add("game", GameScene, true, { network, touchControls, objectInteraction });
 }

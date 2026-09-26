@@ -1,4 +1,5 @@
 import type { Network } from "./network";
+import type { Moderation } from "./moderation";
 import type { ChatBroadcastPayload, ChatScope } from "./types";
 
 const SCOPE_LABEL: Record<ChatScope, string> = {
@@ -17,7 +18,10 @@ export class Chat {
   private inputEl: HTMLInputElement;
   private scopeEl: HTMLSelectElement;
 
-  constructor(private network: Network) {
+  constructor(
+    private network: Network,
+    private moderation: Moderation
+  ) {
     this.logEl = document.querySelector<HTMLDivElement>("#chat-log")!;
     this.inputEl = document.querySelector<HTMLInputElement>("#chat-input")!;
     this.scopeEl = document.querySelector<HTMLSelectElement>("#chat-scope")!;
@@ -41,6 +45,8 @@ export class Chat {
   }
 
   private appendMessage(payload: ChatBroadcastPayload) {
+    if (this.moderation.isBlocked(payload.id)) return;
+
     const line = document.createElement("div");
     line.className = `chat-line chat-line--${payload.scope}`;
 

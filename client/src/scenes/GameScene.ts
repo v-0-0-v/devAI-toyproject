@@ -1,7 +1,21 @@
 import Phaser from "phaser";
 import type { Network } from "../network";
 import type { TouchControls } from "../touchControls";
-import type { Direction, InitPayload, LeftPayload, MovedPayload, Player } from "../types";
+import type { ObjectInteraction } from "../objectInteraction";
+import type {
+  Direction,
+  InitPayload,
+  LeftPayload,
+  MapObject,
+  MovedPayload,
+  Player,
+  RoomZone,
+} from "../types";
+
+const OBJECT_ICONS: Record<MapObject["type"], string> = {
+  whiteboard: "🖊️",
+  youtube: "📺",
+};
 
 interface PlayerVisual {
   container: Phaser.GameObjects.Container;
@@ -27,11 +41,14 @@ const REACTION_KEYS: Record<string, string> = {
 export class GameScene extends Phaser.Scene {
   private network!: Network;
   private touchControls: TouchControls | null = null;
+  private objectInteraction: ObjectInteraction | null = null;
   private tileSize = 32;
   private mapWidth = 0;
   private mapHeight = 0;
   private selfId = "";
   private visuals = new Map<string, PlayerVisual>();
+  private objects: MapObject[] = [];
+  private activeObject: MapObject | null = null;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: Record<"W" | "A" | "S" | "D", Phaser.Input.Keyboard.Key>;
   private moveCooldown = false;
@@ -40,9 +57,10 @@ export class GameScene extends Phaser.Scene {
     super("game");
   }
 
-  init(data: { network: Network; touchControls?: TouchControls }) {
+  init(data: { network: Network; touchControls?: TouchControls; objectInteraction?: ObjectInteraction }) {
     this.network = data.network;
     this.touchControls = data.touchControls ?? null;
+    this.objectInteraction = data.objectInteraction ?? null;
   }
 
   create() {
@@ -94,9 +112,12 @@ export class GameScene extends Phaser.Scene {
     this.tileSize = payload.map.tileSize;
     this.mapWidth = payload.map.width;
     this.mapHeight = payload.map.height;
+    this.objects = payload.map.objects;
 
     this.cameras.main.setBackgroundColor("#111827");
     this.drawMap(payload.map.walls);
+    this.drawRooms(payload.map.rooms);
+    this.drawObjects(payload.map.objects);
 
     for (const player of Object.values(payload.players)) {
       this.spawnPlayer(player);
@@ -106,6 +127,7 @@ export class GameScene extends Phaser.Scene {
     if (selfVisual) {
       this.cameras.main.startFollow(selfVisual.container, true, 0.15, 0.15);
     }
+    this.checkObjectInteraction(payload.players[this.selfId]?.x, payload.players[this.selfId]?.y);
 
     document.querySelector<HTMLDivElement>("#hint")!.hidden = false;
   }
@@ -122,6 +144,55 @@ export class GameScene extends Phaser.Scene {
 
     this.cameras.main.setBounds(0, 0, this.mapWidth * this.tileSize, this.mapHeight * this.tileSize);
     this.physics.world.setBounds(0, 0, this.mapWidth * this.tileSize, this.mapHeight * this.tileSize);
+  }
+
+  // Tints a private room's floor and labels it, so it visually reads as an
+  // enclosed space (its walls already block movement — see server/src/map.ts).
+  private drawRooms(rooms: RoomZone[]) {
+    const graphics = this.add.graphics();
+    for (const room of rooms) {
+      graphics.fillStyle(0x312e81, 0.55);
+      for (let y = room.y0; y <= room.y1; y++) {
+        for (let x = room.x0; x <= room.x1; x++) {
+          graphics.fillRect(x * this.tileSize, y * this.tileSize, this.tileSize - 1, this.tileSize - 1);
+        }
+      }
+
+      const { x } = this.tileToPixel((room.x0 + room.x1) / 2, 0);
+      const label = this.add.text(x, room.y0 * this.tileSize - 6, room.label, {
+        fontSize: "12px",
+        color: "#c7d2fe",
+        backgroundColor: "#00000080",
+        padding: { x: 4, y: 2 },
+      });
+      label.setOrigin(0.5, 1);
+    }
+  }
+
+  private drawObjects(objects: MapObject[]) {
+    for (const obj of objects) {
+      const { x, y } = this.tileToPixel(obj.x, obj.y);
+      this.add.rectangle(x, y, this.tileSize - 4, this.tileSize - 4, 0xfacc15, 0.25).setStrokeStyle(1, 0xfacc15, 0.8);
+      const icon = this.add.text(x, y, OBJECT_ICONS[obj.type], { fontSize: "16px" });
+      icon.setOrigin(0.5, 0.5);
+    }
+  }
+
+  private findObjectAt(x: number, y: number): MapObject | undefined {
+    return this.objects.find((obj) => obj.x === x && obj.y === y);
+  }
+
+  private checkObjectInteraction(x: number | undefined, y: number | undefined) {
+    const obj = x !== undefined && y !== undefined ? this.findObjectAt(x, y) : undefined;
+    if (obj) {
+      if (this.activeObject?.id !== obj.id) {
+        this.activeObject = obj;
+        this.objectInteraction?.enter(obj);
+      }
+    } else if (this.activeObject) {
+      this.activeObject = null;
+      this.objectInteraction?.leave();
+    }
   }
 
   private tileToPixel(tileX: number, tileY: number) {
@@ -170,6 +241,8 @@ export class GameScene extends Phaser.Scene {
         if (payload.id === this.selfId) this.moveCooldown = false;
       },
     });
+
+    if (payload.id === this.selfId) this.checkObjectInteraction(payload.x, payload.y);
   }
 
   private removePlayer(payload: LeftPayload) {

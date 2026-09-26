@@ -8,9 +8,12 @@ import {
   MAP_WIDTH,
   MAP_HEIGHT,
   WALLS,
+  ROOMS,
+  OBJECTS,
   PROXIMITY_RADIUS,
   isWalkable,
   randomSpawnPoint,
+  roomIdAt,
 } from "./map.js";
 import { buildIceServers } from "./turn.js";
 import type {
@@ -23,6 +26,8 @@ import type {
   ChatMessagePayload,
   ChatBroadcastPayload,
   ReactionPayload,
+  WhiteboardStroke,
+  ReportPayload,
 } from "./types.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
@@ -46,7 +51,11 @@ function pairKey(a: string, b: string): string {
   return a < b ? `${a}|${b}` : `${b}|${a}`;
 }
 
+// Private rooms are "soundproof": two players only count as near each other
+// if they're within radius AND in the same room (room 0 = the open floor),
+// so a call never crosses a room wall even at point-blank range across it.
 function isNear(a: Player, b: Player): boolean {
+  if (roomIdAt(a.x, a.y) !== roomIdAt(b.x, b.y)) return false;
   return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) <= PROXIMITY_RADIUS;
 }
 
@@ -98,6 +107,13 @@ function getNearbyPlayerIds(playerId: string): string[] {
 const CHAT_MAX_LEN = 200;
 const REACTION_EMOJIS = new Set(["👍", "❤️", "😂", "😮", "👏", "🎉"]);
 
+// In-memory stroke history per whiteboard object id, so a client opening the
+// board later sees what's already drawn. Capped to bound memory; resets on
+// server restart (no persistence in this MVP).
+const WHITEBOARD_HISTORY_LIMIT = 500;
+const whiteboardHistory: Record<string, WhiteboardStroke[]> = {};
+const VALID_BOARD_IDS = new Set(OBJECTS.filter((o) => o.type === "whiteboard").map((o) => o.id));
+
 const DIRECTION_DELTA: Record<Direction, { dx: number; dy: number }> = {
   up: { dx: 0, dy: -1 },
   down: { dx: 0, dy: 1 },
@@ -112,17 +128,33 @@ function pickColor(): number {
 }
 
 io.on("connection", (socket) => {
-  socket.on("join", (rawNickname: unknown) => {
+  // Accepts either a bare nickname string (legacy/back-compat, still used by
+  // smoke-test.mjs) or {nickname, color} from the login form's color picker.
+  socket.on("join", (raw: unknown) => {
+    let rawNickname: unknown;
+    let requestedColor: unknown;
+    if (raw && typeof raw === "object") {
+      rawNickname = (raw as Record<string, unknown>).nickname;
+      requestedColor = (raw as Record<string, unknown>).color;
+    } else {
+      rawNickname = raw;
+    }
+
     const nickname =
       typeof rawNickname === "string" && rawNickname.trim().length > 0
         ? rawNickname.trim().slice(0, 16)
         : `Guest-${socket.id.slice(0, 4)}`;
 
+    const color =
+      typeof requestedColor === "number" && PLAYER_COLORS.includes(requestedColor)
+        ? requestedColor
+        : pickColor();
+
     const spawn = randomSpawnPoint();
     const player: Player = {
       id: socket.id,
       nickname,
-      color: pickColor(),
+      color,
       x: spawn.x,
       y: spawn.y,
     };
@@ -131,7 +163,14 @@ io.on("connection", (socket) => {
     const initPayload: InitPayload = {
       selfId: socket.id,
       players: { ...players },
-      map: { width: MAP_WIDTH, height: MAP_HEIGHT, tileSize: TILE_SIZE, walls: WALLS },
+      map: {
+        width: MAP_WIDTH,
+        height: MAP_HEIGHT,
+        tileSize: TILE_SIZE,
+        walls: WALLS,
+        rooms: ROOMS,
+        objects: OBJECTS,
+      },
       iceServers: buildIceServers(socket.id),
     };
     socket.emit("init", initPayload);
@@ -208,6 +247,71 @@ io.on("connection", (socket) => {
     const emoji = payload?.emoji;
     if (typeof emoji !== "string" || !REACTION_EMOJIS.has(emoji)) return;
     io.emit("reaction", { id: socket.id, emoji });
+  });
+
+  // Whiteboard: strokes are relayed to everyone (like reactions) and kept as
+  // per-board history so a client opening the board later can catch up.
+  socket.on("whiteboard-join", (rawBoardId: unknown) => {
+    if (typeof rawBoardId !== "string" || !VALID_BOARD_IDS.has(rawBoardId)) return;
+    socket.emit("whiteboard-history", {
+      boardId: rawBoardId,
+      strokes: whiteboardHistory[rawBoardId] ?? [],
+    });
+  });
+
+  socket.on("whiteboard-draw", (raw: unknown) => {
+    if (!players[socket.id]) return;
+    const stroke = raw as Partial<WhiteboardStroke> | null;
+    if (
+      !stroke ||
+      typeof stroke.boardId !== "string" ||
+      !VALID_BOARD_IDS.has(stroke.boardId) ||
+      typeof stroke.x0 !== "number" ||
+      typeof stroke.y0 !== "number" ||
+      typeof stroke.x1 !== "number" ||
+      typeof stroke.y1 !== "number" ||
+      typeof stroke.color !== "string"
+    ) {
+      return;
+    }
+
+    const validated: WhiteboardStroke = {
+      boardId: stroke.boardId,
+      x0: stroke.x0,
+      y0: stroke.y0,
+      x1: stroke.x1,
+      y1: stroke.y1,
+      color: stroke.color.slice(0, 16),
+    };
+
+    const history = (whiteboardHistory[validated.boardId] ??= []);
+    history.push(validated);
+    if (history.length > WHITEBOARD_HISTORY_LIMIT) history.shift();
+
+    io.emit("whiteboard-draw", validated);
+  });
+
+  socket.on("whiteboard-clear", (rawBoardId: unknown) => {
+    if (typeof rawBoardId !== "string" || !VALID_BOARD_IDS.has(rawBoardId)) return;
+    whiteboardHistory[rawBoardId] = [];
+    io.emit("whiteboard-clear", { boardId: rawBoardId });
+  });
+
+  // Minimal moderation: log a structured report server-side. No admin UI in
+  // this MVP — the point is to prove the reporting pipeline exists end to end.
+  socket.on("report", (raw: unknown) => {
+    const reporter = players[socket.id];
+    if (!reporter) return;
+    const payload = raw as Partial<ReportPayload> | null;
+    if (!payload || typeof payload.targetId !== "string") return;
+    const target = players[payload.targetId];
+    if (!target) return;
+
+    const reason = typeof payload.reason === "string" ? payload.reason.trim().slice(0, 200) : "";
+    console.warn(
+      `[report] ${reporter.nickname} (${socket.id}) reported ${target.nickname} (${target.id})` +
+        (reason ? ` — reason: ${reason}` : "")
+    );
   });
 
   socket.on("disconnect", () => {

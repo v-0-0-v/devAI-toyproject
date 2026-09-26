@@ -1,5 +1,6 @@
 import type { Network } from "./network";
 import { WebRTCManager } from "./webrtc";
+import type { Moderation } from "./moderation";
 import type { InitPayload, Player } from "./types";
 
 // Must match server/src/map.ts's PROXIMITY_RADIUS — used only as the point at
@@ -33,7 +34,10 @@ export class VideoChat {
   private selfId = "";
   private positions = new Map<string, { x: number; y: number }>();
   private audioCtx: AudioContext | null = null;
-  private spatialNodes = new Map<string, { source: MediaStreamAudioSourceNode; panner: PannerNode }>();
+  private spatialNodes = new Map<
+    string,
+    { source: MediaStreamAudioSourceNode; panner: PannerNode; gain: GainNode }
+  >();
 
   private localVideoEl: HTMLVideoElement | null = null;
   private screenStream: MediaStream | null = null;
@@ -41,7 +45,8 @@ export class VideoChat {
 
   constructor(
     private network: Network,
-    private localStream: MediaStream | null
+    private localStream: MediaStream | null,
+    private moderation: Moderation
   ) {
     this.barEl = document.querySelector<HTMLDivElement>("#video-bar")!;
     this.renderLocalTile();
@@ -65,11 +70,13 @@ export class VideoChat {
     });
     network.on("proximity-joined", (payload) => {
       this.nicknames.set(payload.peerId, payload.nickname);
+      if (this.moderation.isBlocked(payload.peerId)) return;
       this.webrtc?.startCall(payload.peerId);
     });
     network.on("proximity-left", (payload) => this.webrtc?.closePeer(payload.peerId));
 
     network.on("webrtc-offer", async ({ from, offer }) => {
+      if (this.moderation.isBlocked(from)) return;
       await this.webrtc?.handleOffer(from, offer);
     });
     network.on("webrtc-answer", async ({ from, answer }) => {
@@ -201,10 +208,53 @@ export class VideoChat {
     return { root, video };
   }
 
+  // Local-only moderation row on each remote tile: mute affects only what I
+  // hear (a Web Audio gain, see connectSpatialAudio), block also ends the
+  // call and stops it auto-reconnecting via proximity, report just logs
+  // server-side. None of this is visible to or enforced against the peer.
+  private createModerationControls(peerId: string): HTMLDivElement {
+    const controls = document.createElement("div");
+    controls.className = "video-controls video-controls--remote";
+
+    const muteBtn = document.createElement("button");
+    muteBtn.textContent = "🔇";
+    muteBtn.title = "이 사람 소리만 로컬에서 끄기";
+    muteBtn.classList.toggle("off", this.moderation.isMutedLocally(peerId));
+    muteBtn.addEventListener("click", () => {
+      const muted = this.moderation.toggleMuteLocally(peerId);
+      muteBtn.classList.toggle("off", muted);
+      const nodes = this.spatialNodes.get(peerId);
+      if (nodes) nodes.gain.gain.value = muted ? 0 : 1;
+    });
+
+    const blockBtn = document.createElement("button");
+    blockBtn.textContent = "🚫";
+    blockBtn.title = "차단 (통화 종료, 이 세션 동안 재연결 안 함)";
+    blockBtn.addEventListener("click", () => {
+      this.moderation.block(peerId);
+      this.webrtc?.closePeer(peerId);
+    });
+
+    const reportBtn = document.createElement("button");
+    reportBtn.textContent = "🚩";
+    reportBtn.title = "신고";
+    reportBtn.addEventListener("click", () => {
+      this.network.sendReport(peerId);
+      reportBtn.disabled = true;
+      reportBtn.title = "신고 접수됨";
+    });
+
+    controls.appendChild(muteBtn);
+    controls.appendChild(blockBtn);
+    controls.appendChild(reportBtn);
+    return controls;
+  }
+
   private showRemoteStream(peerId: string, stream: MediaStream) {
     let tile = this.tiles.get(peerId);
     if (!tile) {
       tile = this.createTile(this.nicknames.get(peerId) ?? "참가자", true);
+      tile.root.appendChild(this.createModerationControls(peerId));
       this.tiles.set(peerId, tile);
       this.barEl.appendChild(tile.root);
     }
@@ -249,9 +299,13 @@ export class VideoChat {
     panner.refDistance = 1;
     panner.maxDistance = PROXIMITY_RADIUS + 1;
     panner.rolloffFactor = 1;
-    source.connect(panner).connect(ctx.destination);
+    // A local mute (see createModerationControls) just zeroes this gain — it
+    // never touches the call itself, only what this tab plays back.
+    const gain = ctx.createGain();
+    gain.gain.value = this.moderation.isMutedLocally(peerId) ? 0 : 1;
+    source.connect(panner).connect(gain).connect(ctx.destination);
 
-    this.spatialNodes.set(peerId, { source, panner });
+    this.spatialNodes.set(peerId, { source, panner, gain });
     this.refreshPanner(peerId);
   }
 
@@ -260,6 +314,7 @@ export class VideoChat {
     if (!nodes) return;
     nodes.source.disconnect();
     nodes.panner.disconnect();
+    nodes.gain.disconnect();
     this.spatialNodes.delete(peerId);
   }
 

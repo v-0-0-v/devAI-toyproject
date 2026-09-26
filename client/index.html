@@ -19,6 +19,13 @@
       }
       #login h1 { font-size: 18px; margin-bottom: 4px; }
       #login p { font-size: 12px; color: #9ca3af; margin-top: 0; margin-bottom: 16px; }
+      #avatar-colors { display: flex; gap: 8px; margin-bottom: 4px; }
+      #avatar-colors label {
+        width: 26px; height: 26px; border-radius: 50%; cursor: pointer;
+        border: 2px solid transparent; display: block; box-sizing: border-box;
+      }
+      #avatar-colors input { position: absolute; opacity: 0; width: 0; height: 0; }
+      #avatar-colors input:checked + label { border-color: #fff; }
       #hint {
         position: fixed; bottom: 12px; left: 0; right: 0; text-align: center;
         color: #9ca3af; font-family: system-ui, sans-serif; font-size: 12px;
@@ -107,6 +114,29 @@
       @media (pointer: coarse) {
         #touch-controls { display: grid; }
       }
+
+      #object-overlay {
+        position: fixed; top: 60px; left: 50%; transform: translateX(-50%); z-index: 7;
+        background: #1f2937ee; border: 1px solid #374151; border-radius: 10px;
+        font-family: system-ui, sans-serif; color: #e5e7eb; padding: 10px;
+        max-width: calc(100vw - 20px);
+      }
+      #object-overlay-header {
+        display: flex; justify-content: space-between; align-items: center;
+        font-size: 13px; margin-bottom: 8px; gap: 12px;
+      }
+      #object-overlay-header .hint { font-size: 11px; color: #9ca3af; }
+      #whiteboard-toolbar { display: flex; gap: 6px; margin-bottom: 6px; align-items: center; }
+      .wb-color {
+        width: 20px; height: 20px; border-radius: 50%; border: 2px solid transparent; cursor: pointer;
+      }
+      .wb-color.active { border-color: #fff; }
+      #whiteboard-clear {
+        margin-left: auto; border: none; border-radius: 6px; background: #374151; color: #fff;
+        font-size: 11px; padding: 4px 8px; cursor: pointer;
+      }
+      #whiteboard-canvas { background: #111827; border-radius: 6px; display: block; touch-action: none; }
+      #youtube-frame { width: 320px; height: 180px; border: 0; border-radius: 6px; display: block; }
     </style>
   </head>
   <body>
@@ -115,6 +145,20 @@
         <h1>ZEP Mini MVP</h1>
         <p>닉네임을 입력하고 방향키/WASD로 이동해보세요. 가까이 있는 사람과는 자동으로 화상채팅이 연결됩니다.</p>
         <input id="nickname" maxlength="16" placeholder="닉네임" autocomplete="off" required />
+        <div id="avatar-colors">
+          <input type="radio" id="color-0" name="avatar-color" value="15680580" checked />
+          <label for="color-0" style="background: #ef4444"></label>
+          <input type="radio" id="color-1" name="avatar-color" value="16096779" />
+          <label for="color-1" style="background: #f59e0b"></label>
+          <input type="radio" id="color-2" name="avatar-color" value="1096065" />
+          <label for="color-2" style="background: #10b981"></label>
+          <input type="radio" id="color-3" name="avatar-color" value="3900150" />
+          <label for="color-3" style="background: #3b82f6"></label>
+          <input type="radio" id="color-4" name="avatar-color" value="9133302" />
+          <label for="color-4" style="background: #8b5cf6"></label>
+          <input type="radio" id="color-5" name="avatar-color" value="15485081" />
+          <label for="color-5" style="background: #ec4899"></label>
+        </div>
         <button type="submit">입장하기</button>
       </form>
     </div>
@@ -136,6 +180,30 @@
       <button type="button" data-dir="left">◀</button>
       <button type="button" data-dir="right">▶</button>
       <button type="button" data-dir="down">▼</button>
+    </div>
+    <div id="object-overlay" hidden>
+      <div id="object-overlay-header">
+        <span id="object-overlay-title"></span>
+        <span class="hint">타일에서 벗어나면 자동으로 닫혀요</span>
+      </div>
+      <div id="whiteboard-body" hidden>
+        <div id="whiteboard-toolbar">
+          <button type="button" class="wb-color active" data-color="#f9fafb"></button>
+          <button type="button" class="wb-color" data-color="#ef4444"></button>
+          <button type="button" class="wb-color" data-color="#3b82f6"></button>
+          <button type="button" class="wb-color" data-color="#10b981"></button>
+          <button type="button" id="whiteboard-clear">지우기</button>
+        </div>
+        <canvas id="whiteboard-canvas" width="360" height="240"></canvas>
+      </div>
+      <div id="youtube-body" hidden>
+        <iframe
+          id="youtube-frame"
+          allow="autoplay; encrypted-media"
+          allowfullscreen
+          title="같이 보기"
+        ></iframe>
+      </div>
     </div>
     <div id="hint" hidden>방향키/WASD 이동 · 숫자 1~6 리액션 · 근처 대화는 자동 화상채팅</div>
     <script type="module" src="/src/main.ts"></script>

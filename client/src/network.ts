@@ -13,6 +13,9 @@ import type {
   RelayedAnswerPayload,
   RelayedIceCandidatePayload,
   RelayedOfferPayload,
+  WhiteboardClearPayload,
+  WhiteboardHistoryPayload,
+  WhiteboardStroke,
 } from "./types";
 
 // If VITE_SERVER_URL isn't set: in dev, default to the local server on a
@@ -35,6 +38,9 @@ interface ServerEvents {
   "webrtc-ice-candidate": RelayedIceCandidatePayload;
   "chat-message": ChatBroadcastPayload;
   reaction: ReactionBroadcastPayload;
+  "whiteboard-draw": WhiteboardStroke;
+  "whiteboard-history": WhiteboardHistoryPayload;
+  "whiteboard-clear": WhiteboardClearPayload;
 }
 
 type Listener<T> = (payload: T) => void;
@@ -51,6 +57,9 @@ const EVENT_NAMES = [
   "webrtc-ice-candidate",
   "chat-message",
   "reaction",
+  "whiteboard-draw",
+  "whiteboard-history",
+  "whiteboard-clear",
 ] as const satisfies readonly (keyof ServerEvents)[];
 
 /**
@@ -72,13 +81,16 @@ export class Network {
     "webrtc-ice-candidate": new Set(),
     "chat-message": new Set(),
     reaction: new Set(),
+    "whiteboard-draw": new Set(),
+    "whiteboard-history": new Set(),
+    "whiteboard-clear": new Set(),
   };
 
-  constructor(nickname: string) {
+  constructor(nickname: string, color?: number) {
     this.socket = io(SERVER_URL, { transports: ["websocket"] });
 
     this.socket.on("connect", () => {
-      this.socket.emit("join", nickname);
+      this.socket.emit("join", { nickname, color });
     });
 
     // Cast to `unknown` here: dispatching by a runtime event name can't stay
@@ -120,5 +132,21 @@ export class Network {
 
   sendReaction(emoji: string) {
     this.socket.emit("reaction", { emoji });
+  }
+
+  joinWhiteboard(boardId: string) {
+    this.socket.emit("whiteboard-join", boardId);
+  }
+
+  sendWhiteboardStroke(stroke: WhiteboardStroke) {
+    this.socket.emit("whiteboard-draw", stroke);
+  }
+
+  clearWhiteboard(boardId: string) {
+    this.socket.emit("whiteboard-clear", boardId);
+  }
+
+  sendReport(targetId: string, reason?: string) {
+    this.socket.emit("report", { targetId, reason });
   }
 }

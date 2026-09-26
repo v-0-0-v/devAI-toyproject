@@ -8,6 +8,23 @@ export interface Player {
   y: number;
 }
 
+export interface RoomZone {
+  id: number;
+  label: string;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+export interface MapObject {
+  id: string;
+  type: "whiteboard" | "youtube";
+  x: number;
+  y: number;
+  videoId?: string;
+}
+
 export interface InitPayload {
   selfId: string;
   players: Record<string, Player>;
@@ -16,6 +33,8 @@ export interface InitPayload {
     height: number;
     tileSize: number;
     walls: number[][];
+    rooms: RoomZone[];
+    objects: MapObject[];
   };
   iceServers: RTCIceServer[];
 }
@@ -67,4 +86,22 @@ export interface ChatBroadcastPayload {
 export interface ReactionBroadcastPayload {
   id: string;
   emoji: string;
+}
+
+export interface WhiteboardStroke {
+  boardId: string;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  color: string;
+}
+
+export interface WhiteboardHistoryPayload {
+  boardId: string;
+  strokes: WhiteboardStroke[];
+}
+
+export interface WhiteboardClearPayload {
+  boardId: string;
 }
