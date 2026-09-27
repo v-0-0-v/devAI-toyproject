@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import express, { type Express } from "express";
 import { MAP_DATA_PATH } from "./map.js";
+import { MAX_SCRIPT_CODE_LENGTH } from "./zepScript.js";
 import type { MapDataPayload, MapObject, RoomZone } from "./types.js";
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -51,12 +52,12 @@ function validateMapData(input: unknown): MapDataPayload | string {
   }
 
   if (!Array.isArray(input.objects)) return "objects가 배열이 아닙니다";
-  const VALID_TYPES = new Set(["whiteboard", "youtube", "minigame"]);
+  const VALID_TYPES = new Set(["whiteboard", "youtube", "minigame", "script"]);
   const objects: MapObject[] = [];
   const seenIds = new Set<string>();
   for (const raw of input.objects as unknown[]) {
     if (!isPlainObject(raw)) return "objects 항목이 올바르지 않습니다";
-    const { id, type, x, y, videoId } = raw;
+    const { id, type, x, y, videoId, code } = raw;
     if (typeof id !== "string" || id.length === 0) return "object id가 올바르지 않습니다";
     if (seenIds.has(id)) return `object id가 중복됩니다: ${id}`;
     seenIds.add(id);
@@ -67,8 +68,17 @@ function validateMapData(input: unknown): MapDataPayload | string {
     if (type === "youtube" && typeof videoId !== "string") {
       return `object "${id}"(youtube)에는 videoId가 필요합니다`;
     }
+    if (type === "script") {
+      if (typeof code !== "string" || code.trim().length === 0) {
+        return `object "${id}"(script)에는 code가 필요합니다`;
+      }
+      if (code.length > MAX_SCRIPT_CODE_LENGTH) {
+        return `object "${id}"(script)의 code가 너무 깁니다 (최대 ${MAX_SCRIPT_CODE_LENGTH}자)`;
+      }
+    }
     const obj: MapObject = { id, type: type as MapObject["type"], x, y };
     if (typeof videoId === "string") obj.videoId = videoId;
+    if (typeof code === "string") obj.code = code;
     objects.push(obj);
   }
 

@@ -19,10 +19,14 @@ export interface RoomZone {
 
 export interface MapObject {
   id: string;
-  type: "whiteboard" | "youtube" | "minigame";
+  type: "whiteboard" | "youtube" | "minigame" | "script";
   x: number;
   y: number;
   videoId?: string;
+  /** ZEP Script source — only meaningful when type is "script". Only ever
+   * used by the editor (round-tripping /api/map); the running game client
+   * never reads or executes it, since scripts run server-side only. */
+  code?: string;
 }
 
 export interface InitPayload {
@@ -57,7 +61,9 @@ export interface ProximityLeftPayload {
   peerId: string;
 }
 
-export type ChatScope = "global" | "nearby";
+// "system" is server-only (a ZEP Script's $.say/$.broadcast) — the client
+// never sends it, only ever receives it.
+export type ChatScope = "global" | "nearby" | "system";
 
 export interface ChatBroadcastPayload {
   id: string;

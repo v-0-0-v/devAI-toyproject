@@ -18,6 +18,7 @@ import {
 import { registerMapEditorRoutes } from "./mapEditor.js";
 import { MemoryGameStore, type GameStore } from "./store.js";
 import { initMediasoup, getRouter, createWebRtcTransport } from "./sfu.js";
+import { ScriptSandbox, type ScriptHostCallbacks } from "./zepScript.js";
 import type { Producer, Consumer, WebRtcTransport } from "mediasoup/types";
 import {
   appendWhiteboardStroke,
@@ -155,6 +156,7 @@ const WHITEBOARD_HISTORY_LIMIT = 500;
 const ADMIN_REPORTS_LIMIT = 100;
 const VALID_BOARD_IDS = new Set(OBJECTS.filter((o) => o.type === "whiteboard").map((o) => o.id));
 const MINIGAME_OBJECT_IDS = new Set(OBJECTS.filter((o) => o.type === "minigame").map((o) => o.id));
+const SCRIPT_OBJECTS = OBJECTS.filter((o) => o.type === "script");
 
 const DIRECTION_DELTA: Record<Direction, { dx: number; dy: number }> = {
   up: { dx: 0, dy: -1 },
@@ -262,6 +264,80 @@ function cleanupSfuPeer(socketId: string) {
   sfuPeers.delete(socketId);
 }
 
+// --- ZEP Script (per-instance, in-memory only) ----------------------------
+// Same accepted limitation as the SFU/minigame state above: a script's
+// top-level `let`/`var` bindings (its persistent state — see zepScript.ts)
+// live in one process's memory, not GameStore, so in a horizontally-scaled
+// deployment each instance runs its own independent copy of every script.
+const scriptSandboxes = new Map<string, ScriptSandbox>(); // objectId -> sandbox
+const playerScriptObject = new Map<string, string | null>(); // socket id -> current script object id
+
+function scriptObjectAt(x: number, y: number) {
+  return SCRIPT_OBJECTS.find((o) => o.x === x && o.y === y);
+}
+
+// A script's $.say/$.broadcast reach clients through the "system" chat
+// scope — the ordinary chat-message handler's scope allow-list already
+// rejects "system" from a client, so a script can post as "시스템" but a
+// player never can (see types.ts's ChatScope doc comment).
+function scriptSay(playerId: string, text: string) {
+  const trimmed = text.trim().slice(0, CHAT_MAX_LEN);
+  if (!trimmed) return;
+  const broadcast: ChatBroadcastPayload = { id: "system", nickname: "시스템", scope: "system", text: trimmed, ts: Date.now() };
+  io.to(playerId).emit("chat-message", broadcast);
+}
+
+function scriptBroadcast(text: string) {
+  const trimmed = text.trim().slice(0, CHAT_MAX_LEN);
+  if (!trimmed) return;
+  const broadcast: ChatBroadcastPayload = { id: "system", nickname: "시스템", scope: "system", text: trimmed, ts: Date.now() };
+  io.emit("chat-message", broadcast);
+}
+
+// Shared by real player movement and $.teleport: both are "put this player
+// at a validated position and re-run everything that depends on it."
+// Assumes the caller already holds `mutex` (withLock) — it must NOT take
+// the lock itself, or a script's teleport (which does take it, since that
+// entry point isn't nested inside any handler) would deadlock against the
+// move/join handler that's already holding it while awaiting this.
+async function movePlayerTo(playerId: string, x: number, y: number) {
+  if (!isWalkable(x, y)) return;
+  const player = await store.getPlayer(playerId);
+  if (!player) return;
+  const previousPosition = { x: player.x, y: player.y };
+  player.x = x;
+  player.y = y;
+  await store.setPlayer(player);
+  io.emit("player-moved", { id: playerId, x: player.x, y: player.y });
+  await updateProximity(playerId);
+  await updateScriptTile(playerId, previousPosition, player);
+}
+
+async function updateScriptTile(socketId: string, previousPosition: { x: number; y: number }, player: Player) {
+  const currentObj = scriptObjectAt(player.x, player.y);
+  const previousObjId = playerScriptObject.get(socketId) ?? null;
+  const currentObjId = currentObj?.id ?? null;
+  if (currentObjId === previousObjId) return;
+
+  if (previousObjId) {
+    scriptSandboxes
+      .get(previousObjId)
+      ?.triggerLeave({ id: player.id, nickname: player.nickname, x: previousPosition.x, y: previousPosition.y });
+  }
+  playerScriptObject.set(socketId, currentObjId);
+  if (currentObj) {
+    scriptSandboxes.get(currentObj.id)?.triggerEnter({ id: player.id, nickname: player.nickname, x: player.x, y: player.y });
+  }
+}
+
+const scriptHostCallbacks: ScriptHostCallbacks = {
+  say: scriptSay,
+  broadcast: scriptBroadcast,
+  teleport: (playerId, x, y) => {
+    void withLock(() => movePlayerTo(playerId, Math.trunc(x), Math.trunc(y)));
+  },
+};
+
 io.on("connection", async (socket) => {
   await store.setSocketIp(socket.id, getClientIp(socket));
   if (await store.isBannedIp(getClientIp(socket))) {
@@ -320,6 +396,7 @@ io.on("connection", async (socket) => {
       socket.emit("init", initPayload);
       socket.broadcast.emit("player-joined", player);
       await updateProximity(socket.id);
+      await updateScriptTile(socket.id, { x: player.x, y: player.y }, player);
     })
   );
 
@@ -331,15 +408,7 @@ io.on("connection", async (socket) => {
         return;
       }
       const { dx, dy } = DIRECTION_DELTA[direction];
-      const nextX = player.x + dx;
-      const nextY = player.y + dy;
-      if (!isWalkable(nextX, nextY)) return;
-
-      player.x = nextX;
-      player.y = nextY;
-      await store.setPlayer(player);
-      io.emit("player-moved", { id: socket.id, x: player.x, y: player.y });
-      await updateProximity(socket.id);
+      await movePlayerTo(socket.id, player.x + dx, player.y + dy);
     })
   );
 
@@ -753,7 +822,15 @@ io.on("connection", async (socket) => {
   socket.on("disconnect", () =>
     withLock(async () => {
       cleanupSfuPeer(socket.id);
-      if (!(await store.getPlayer(socket.id))) return;
+      const player = await store.getPlayer(socket.id);
+      if (!player) return;
+      const currentScriptObjectId = playerScriptObject.get(socket.id);
+      if (currentScriptObjectId) {
+        scriptSandboxes
+          .get(currentScriptObjectId)
+          ?.triggerLeave({ id: player.id, nickname: player.nickname, x: player.x, y: player.y });
+      }
+      playerScriptObject.delete(socket.id);
       cleanupMinigameFor(socket.id);
       await endAllCallsFor(socket.id);
       await store.deletePlayer(socket.id);
@@ -765,6 +842,18 @@ io.on("connection", async (socket) => {
 
 async function main() {
   await initMediasoup();
+
+  for (const obj of SCRIPT_OBJECTS) {
+    if (!obj.code) continue;
+    const sandbox = await ScriptSandbox.create(obj.id, obj.code, scriptHostCallbacks);
+    if (sandbox.loadError) {
+      console.warn(`[zep-script:${obj.id}] failed to load, object is now inert: ${sandbox.loadError}`);
+    }
+    scriptSandboxes.set(obj.id, sandbox);
+  }
+  if (SCRIPT_OBJECTS.length > 0) {
+    console.log(`[zep-mini-mvp] loaded ${SCRIPT_OBJECTS.length} ZEP Script object(s)`);
+  }
 
   const redisUrl = process.env.REDIS_URL;
   if (redisUrl) {

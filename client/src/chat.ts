@@ -5,6 +5,7 @@ import type { ChatBroadcastPayload, ChatScope } from "./types";
 const SCOPE_LABEL: Record<ChatScope, string> = {
   global: "전체",
   nearby: "근처",
+  system: "시스템",
 };
 
 /**

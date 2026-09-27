@@ -245,6 +245,35 @@ async function main() {
   carol.emit("minigame-leave");
   await wait(200);
 
+  // --- ZEP Script: walk onto mapdata.json's "script-1" object tile at
+  // (2,2) and verify $.say/$.broadcast/$.teleport (server/src/zepScript.ts)
+  // all actually fired through the real running server. Deep sandbox
+  // security (no require/process, infinite-loop/memory-bomb containment,
+  // Function-constructor escape attempts) is covered by zepScript.ts's own
+  // module-level tests, not repeated here — this just confirms the live
+  // wiring (tile-transition detection + host callbacks) works end to end. ---
+  const eve = io("http://localhost:3001", { transports: ["websocket"] });
+  const eveSystemMessages = [];
+  let eveSawTeleport = false;
+  eve.on("chat-message", (p) => {
+    if (p.scope === "system") eveSystemMessages.push(p);
+  });
+  eve.on("player-moved", (p) => {
+    if (p.id === eve.id && p.x === 10 && p.y === 7) eveSawTeleport = true;
+  });
+  eve.on("connect", () => eve.emit("join", "Eve"));
+  await wait(500);
+  for (let i = 0; i < 25; i++) {
+    eve.emit("move", "up");
+    eve.emit("move", "left");
+  }
+  await wait(500);
+  eve.emit("move", "right"); // (1,1) -> (2,1)
+  await wait(200);
+  eve.emit("move", "down"); // (2,1) -> (2,2), script-1's tile
+  await wait(500);
+  console.log("eve system messages:", eveSystemMessages);
+
   // --- admin moderation: an unauthorized client's ban attempt must be a
   // no-op; with ADMIN_TOKEN set (opt-in — most dev/CI runs won't have it),
   // additionally verify a real admin ban force-disconnects the target ---
@@ -308,6 +337,10 @@ async function main() {
     serverAliveAfterReport: a.connected && b.connected,
     reportPersisted: persistedReports.some((r) => r.reporter_id === a.id && r.target_id === b.id),
     mapObjectsIncludeMinigame: aInit?.map?.objects?.some((o) => o.id === "rps-1" && o.type === "minigame"),
+    mapObjectsIncludeScript: aInit?.map?.objects?.some((o) => o.id === "script-1" && o.type === "script"),
+    zepScriptSayFired: eveSystemMessages.some((m) => m.text.includes("환영합니다")),
+    zepScriptBroadcastFired: eveSystemMessages.some((m) => m.text.includes("텔레포트 패드를 밟았습니다")),
+    zepScriptTeleportFired: eveSawTeleport,
     minigameMatchmakingWorked: carolMatched && daveMatched,
     minigameCarolWon:
       carolResult?.outcome === "win" && carolResult.yourChoice === "rock" && carolResult.opponentChoice === "scissors",
@@ -325,6 +358,7 @@ async function main() {
 
   carol.close();
   dave.close();
+  eve.close();
 
   const ok = Object.values(results).every(Boolean);
   console.log(ok ? "SMOKE TEST PASSED" : "SMOKE TEST FAILED");

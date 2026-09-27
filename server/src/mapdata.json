@@ -364,6 +364,13 @@
       "type": "minigame",
       "x": 4,
       "y": 10
+    },
+    {
+      "id": "script-1",
+      "type": "script",
+      "x": 2,
+      "y": 2,
+      "code": "let visitCount = 0;\n$.onEnter(function(player) {\n  visitCount++;\n  $.say(player.id, player.nickname + '님, 환영합니다! 당신은 ' + visitCount + '번째 방문자입니다.');\n  $.broadcast(player.nickname + '님이 텔레포트 패드를 밟았습니다.');\n  $.teleport(player.id, 10, 7);\n});\n"
     }
   ]
 }

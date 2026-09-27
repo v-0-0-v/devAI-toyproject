@@ -19,10 +19,12 @@ export interface RoomZone {
 
 export interface MapObject {
   id: string;
-  type: "whiteboard" | "youtube" | "minigame";
+  type: "whiteboard" | "youtube" | "minigame" | "script";
   x: number;
   y: number;
   videoId?: string;
+  /** ZEP Script source (see server/src/zepScript.ts) — only meaningful when type is "script". */
+  code?: string;
 }
 
 export interface InitPayload {
@@ -126,8 +128,12 @@ export interface SfuNewProducerPayload {
 }
 
 // "global" reaches every player in the map; "nearby" reaches only players
-// currently within PROXIMITY_RADIUS of the sender (same radius as video calls).
-export type ChatScope = "global" | "nearby";
+// currently within PROXIMITY_RADIUS of the sender (same radius as video
+// calls). "system" is server-only — a ZEP Script's $.say/$.broadcast (see
+// zepScript.ts) — the chat-message handler's own allow-list already rejects
+// it from a client, so no separate check is needed to keep a client from
+// impersonating the system.
+export type ChatScope = "global" | "nearby" | "system";
 
 export interface ChatMessagePayload {
   scope: ChatScope;

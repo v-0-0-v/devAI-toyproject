@@ -16,14 +16,15 @@ export interface RoomZone {
 }
 
 // Fixed interactive objects players can walk onto (see server/src/index.ts's
-// whiteboard-*/minigame-* relays and client/src/objectInteraction.ts +
-// client/src/minigame.ts).
+// whiteboard-*/minigame-* relays, zepScript.ts, client/src/objectInteraction.ts
+// + client/src/minigame.ts).
 export interface MapObject {
   id: string;
-  type: "whiteboard" | "youtube" | "minigame";
+  type: "whiteboard" | "youtube" | "minigame" | "script";
   x: number;
   y: number;
   videoId?: string;
+  code?: string;
 }
 
 interface MapData {

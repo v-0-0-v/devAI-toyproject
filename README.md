@@ -57,10 +57,12 @@
 - **웹 기반 시각적 맵 에디터**
   - `client/editor.html`에서 벽 칸 클릭/드래그로 토글, 방(Room)/오브젝트 추가·삭제, 맵 크기 조정을 그래픽으로 수행 가능 — `ADMIN_TOKEN`으로 저장(POST `/api/map`), 조회(GET `/api/map`)는 인증 불필요
   - 저장은 `mapdata.json`을 직접 덮어쓰며(이전 파일은 `.bak`으로 자동 백업) 실행 중인 서버에 즉시 반영되지는 않음 — 적용하려면 서버 재시작 필요 (실시간 핫스왑은 스코프 밖)
-
-## 포함되지 않은 것 (다음 단계)
-
-- ZEP Script 같은 커스텀 스크립팅 API
+  - 오브젝트 타입이 "script"면 코드 입력용 textarea가 나타남 (아래 ZEP Script 참고)
+- **ZEP Script (커스텀 스크립팅 API)**
+  - 맵의 "script" 타입 오브젝트에 JavaScript 코드를 붙여 커스텀 동작을 만들 수 있음 — 플레이어가 타일을 밟을 때(`$.onEnter`)/벗어날 때(`$.onLeave`)/일정 주기마다(`$.onInterval`) 실행되는 핸들러를 등록
+  - API: `$.onEnter(fn)` / `$.onLeave(fn)` / `$.onInterval(ms, fn)`, `$.say(playerId, text)`(1인 시스템 메시지), `$.broadcast(text)`(전체 시스템 메시지), `$.teleport(playerId, x, y)`, `$.log(...)`(디버그). 스크립트 최상위 `let`/`var`는 서버가 켜져 있는 동안 그대로 유지되는 상태로 쓸 수 있음 (별도 getState/setState API 불필요)
+  - **보안**: 스크립트는 신뢰할 수 없는 사용자 입력이라, QuickJS를 WebAssembly로 컴파일한 실제 격리 샌드박스(`quickjs-emscripten`)에서 실행됨 — Node 공식 문서가 "보안 경계 아님"이라 명시하는 `vm` 모듈이 아니라 아예 별개의 JS 엔진이라 `require`/`process`/네트워크/파일시스템에 원천적으로 접근 불가. 무한 루프는 200ms 후 강제 중단, 과도한 메모리 할당은 16MB 제한으로 차단 — `while(true){}`와 `Function` 생성자를 통한 탈출 시도로 직접 검증함
+  - 예시 오브젝트(`script-1`, 맵 좌상단)는 방문자 수를 세고 환영 메시지를 보낸 뒤 다른 위치로 순간이동시키는 "텔레포트 패드"
 
 ## 구조
 
@@ -79,6 +81,7 @@ zep-mini-mvp/
 │   ├── mapdata.json   # 타일/벽/방/오브젝트 정의 (map.ts가 런타임에 로드)
 │   ├── mapEditor.ts   # GET/POST /api/map — 맵 에디터 저장 API + 검증
 │   ├── persistence.ts # SQLite 영구 저장 (화이트보드 스트로크 + 신고 로그)
+│   ├── zepScript.ts   # ZEP Script 샌드박스 (quickjs-emscripten, "script" 오브젝트 실행)
 │   ├── turn.ts        # (더 이상 사용 안 함 — 아래 참고) coturn 크리덴셜 발급
 │   ├── store.ts       # GameStore 인터페이스 + 인메모리 구현 (기본값)
 │   └── redisStore.ts  # GameStore의 Redis 구현 (REDIS_URL 설정 시 사용)
@@ -120,11 +123,11 @@ npm run dev   # http://localhost:5173
 
 ### 3. (선택) 맵 에디터
 
-`http://localhost:5173/editor.html`에서 현재 맵을 그래픽으로 편집할 수 있습니다 (불러오기는 토큰 없이 가능, 저장은 `ADMIN_TOKEN` 필요). 벽 모드에서 칸을 클릭/드래그해 벽 ↔ 바닥을 토글하고, 방 모드에서 두 지점을 클릭해 회의실 범위를 지정하고, 오브젝트 모드에서 칸을 클릭해 화이트보드/유튜브/미니게임 오브젝트 좌표를 채운 뒤 각각 폼에서 추가합니다. 저장하면 `mapdata.json`이 즉시 덮어써지지만(이전 파일은 `.bak`으로 자동 백업), **실행 중인 서버에는 반영되지 않으므로 적용하려면 서버를 재시작**해야 합니다.
+`http://localhost:5173/editor.html`에서 현재 맵을 그래픽으로 편집할 수 있습니다 (불러오기는 토큰 없이 가능, 저장은 `ADMIN_TOKEN` 필요). 벽 모드에서 칸을 클릭/드래그해 벽 ↔ 바닥을 토글하고, 방 모드에서 두 지점을 클릭해 회의실 범위를 지정하고, 오브젝트 모드에서 칸을 클릭해 화이트보드/유튜브/미니게임/script 오브젝트 좌표를 채운 뒤 각각 폼에서 추가합니다. 타입을 "script"로 선택하면 코드 입력용 textarea가 나타나며, 여기 작성한 JavaScript가 샌드박스에서 실행됩니다 (API 목록은 위 "ZEP Script" 항목 참고). 저장하면 `mapdata.json`이 즉시 덮어써지지만(이전 파일은 `.bak`으로 자동 백업), **실행 중인 서버에는 반영되지 않으므로 적용하려면 서버를 재시작**해야 합니다.
 
 ### 4. (선택) 서버 단독 스모크 테스트
 
-브라우저 없이 join/move/broadcast/근접(+방음 구역 격리)/mediasoup SFU 시그널링(+잘못된 입력에 대한 서버 안정성)/채팅/리액션/화이트보드(+영구 저장)/아바타색상/신고(+영구 저장)/미니게임/관리자차단/관리자 신고 로그 조회 플로우를 빠르게 검증하고 싶다면, 서버 실행 중에:
+브라우저 없이 join/move/broadcast/근접(+방음 구역 격리)/mediasoup SFU 시그널링(+잘못된 입력에 대한 서버 안정성)/채팅/리액션/화이트보드(+영구 저장)/아바타색상/신고(+영구 저장)/미니게임/관리자차단/관리자 신고 로그 조회/ZEP Script(타일 진입 시 `$.say`/`$.broadcast`/`$.teleport` 동작) 플로우를 빠르게 검증하고 싶다면, 서버 실행 중에:
 
 ```bash
 cd server
@@ -163,6 +166,10 @@ PORT=4002 REDIS_URL=redis://localhost:6379 npm run start   # 다른 셸에서
 
 ## 다음 단계 제안
 
-ZEP/Gather/Topia/WorkAdventure 등 유사 플랫폼 벤치마크를 바탕으로 우선순위를 매긴 목록입니다. 실용적인 항목과 mediasoup SFU 전환까지 모두 구현 완료(텍스트 채팅·리액션·공간음향·모바일 조작·화면 공유·프라이빗 회의실·오브젝트 상호작용·아바타 색상·모더레이션·미니게임·맵 JSON 외부화 + 시각적 에디터·Redis 수평 확장·영구 저장·CI·mediasoup SFU)했고, 남은 것은 아키텍처 자체를 바꾸는 대형 작업 한 가지뿐입니다:
+ZEP/Gather/Topia/WorkAdventure 등 유사 플랫폼 벤치마크를 바탕으로 우선순위를 매겨두었던 목록이었습니다. 텍스트 채팅·리액션·공간음향·모바일 조작·화면 공유·프라이빗 회의실·오브젝트 상호작용·아바타 색상·모더레이션·미니게임·맵 JSON 외부화 + 시각적 에디터·Redis 수평 확장·영구 저장·CI·mediasoup SFU 전환에 이어, 마지막으로 남아있던 대형 항목이던 ZEP Script(커스텀 스크립팅 API, QuickJS 기반 보안 샌드박스)까지 구현을 완료해 벤치마크 목록의 모든 항목이 구현되었습니다.
 
-1. ZEP Script 같은 커스텀 스크립팅 API (보안 샌드박싱 선행 필요)
+이후 방향을 잡는다면 다음과 같은 것들을 고려할 수 있습니다 (모두 이 미니 MVP 스코프를 넘어서는, 실서비스 전환 시의 과제들):
+
+- 영구 저장(SQLite)·미니게임 매칭·ZEP Script 상태를 Redis/공유 DB로 옮겨 수평 확장 시에도 완전히 인스턴스 독립적으로 만들기
+- ZEP Script API 확장 (오브젝트 간 통신, `getState`/`setState` 영속화, 스크립트별 리소스 사용량 대시보드 등)
+- 실시간 맵 핫스왑 (현재는 에디터 저장 후 서버 재시작 필요)

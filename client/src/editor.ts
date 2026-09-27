@@ -4,7 +4,7 @@
 // restart to take effect; this editor never touches a live game session.
 const SERVER_URL: string = import.meta.env.VITE_SERVER_URL || (import.meta.env.DEV ? "http://localhost:3001" : "");
 
-type MapObjectType = "whiteboard" | "youtube" | "minigame";
+type MapObjectType = "whiteboard" | "youtube" | "minigame" | "script";
 
 interface RoomZone {
   id: number;
@@ -21,6 +21,7 @@ interface MapObjectData {
   x: number;
   y: number;
   videoId?: string;
+  code?: string;
 }
 
 interface MapData {
@@ -72,7 +73,13 @@ const objectTypeSelect = document.querySelector<HTMLSelectElement>("#object-type
 const objectX = document.querySelector<HTMLInputElement>("#object-x")!;
 const objectY = document.querySelector<HTMLInputElement>("#object-y")!;
 const objectVideoId = document.querySelector<HTMLInputElement>("#object-video-id")!;
+const objectCodeRow = document.querySelector<HTMLDivElement>("#object-code-row")!;
+const objectCode = document.querySelector<HTMLTextAreaElement>("#object-code")!;
 const addObjectBtn = document.querySelector<HTMLButtonElement>("#add-object-btn")!;
+
+objectTypeSelect.addEventListener("change", () => {
+  objectCodeRow.hidden = objectTypeSelect.value !== "script";
+});
 
 function setStatus(text: string, kind: "ok" | "err" | "" = "") {
   statusEl.textContent = text;
@@ -178,6 +185,7 @@ function drawCanvas() {
     whiteboard: "#f9fafb",
     youtube: "#ef4444",
     minigame: "#10b981",
+    script: "#fbbf24",
   };
   for (const obj of mapData.objects) {
     ctx.fillStyle = OBJECT_COLOR[obj.type];
@@ -222,7 +230,7 @@ function renderObjectList() {
     const row = document.createElement("div");
     row.className = "list-row";
     const label = document.createElement("span");
-    label.textContent = `${obj.id} [${obj.type}] (${obj.x},${obj.y})${obj.videoId ? ` video=${obj.videoId}` : ""}`;
+    label.textContent = `${obj.id} [${obj.type}] (${obj.x},${obj.y})${obj.videoId ? ` video=${obj.videoId}` : ""}${obj.code ? ` (script, ${obj.code.length}자)` : ""}`;
     const delBtn = document.createElement("button");
     delBtn.className = "danger";
     delBtn.textContent = "삭제";
@@ -326,6 +334,7 @@ addObjectBtn.addEventListener("click", () => {
   const x = Number(objectX.value);
   const y = Number(objectY.value);
   const videoId = objectVideoId.value.trim();
+  const code = objectCode.value;
   if (!id || !Number.isFinite(x) || !Number.isFinite(y)) {
     setStatus("오브젝트 정보를 모두 입력하세요.", "err");
     return;
@@ -334,9 +343,14 @@ addObjectBtn.addEventListener("click", () => {
     setStatus("youtube 오브젝트에는 videoId가 필요합니다.", "err");
     return;
   }
+  if (type === "script" && !code.trim()) {
+    setStatus("script 오브젝트에는 code가 필요합니다.", "err");
+    return;
+  }
   mapData.objects = mapData.objects.filter((o) => o.id !== id);
   const obj: MapObjectData = { id, type, x, y };
   if (type === "youtube") obj.videoId = videoId;
+  if (type === "script") obj.code = code;
   mapData.objects.push(obj);
   render();
   setStatus(`오브젝트 "${id}"를 추가했습니다 (아직 저장 전).`, "ok");

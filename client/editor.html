@@ -13,10 +13,14 @@
         background: #1f2937; border: 1px solid #374151; border-radius: 10px; padding: 10px;
       }
       label { display: block; font-size: 11px; color: #9ca3af; margin-bottom: 2px; }
-      input, select {
+      input, select, textarea {
         background: #111827; color: #e5e7eb; border: 1px solid #374151; border-radius: 6px;
         padding: 5px 6px; font-size: 12px; box-sizing: border-box;
       }
+      textarea { width: 100%; font-family: ui-monospace, monospace; resize: vertical; margin-top: 8px; }
+      #object-code-row { margin-top: 8px; }
+      #object-code-row .hint { font-size: 11px; color: #6b7280; margin-top: 4px; }
+      #object-code-row .hint code { background: #111827; padding: 1px 4px; border-radius: 4px; }
       button {
         border: none; border-radius: 6px; background: #3b82f6; color: #fff; cursor: pointer;
         font-size: 12px; padding: 6px 10px;
@@ -118,12 +122,27 @@
                 <option value="whiteboard">whiteboard</option>
                 <option value="youtube">youtube</option>
                 <option value="minigame">minigame</option>
+                <option value="script">script</option>
               </select>
             </div>
             <div><label>x</label><input id="object-x" type="number" /></div>
             <div><label>y</label><input id="object-y" type="number" /></div>
             <div><label>videoId</label><input id="object-video-id" type="text" placeholder="youtube만" /></div>
             <button id="add-object-btn">추가</button>
+          </div>
+          <div id="object-code-row" hidden>
+            <label for="object-code">code (ZEP Script)</label>
+            <textarea
+              id="object-code"
+              rows="8"
+              placeholder="$.onEnter(function(player) {&#10;  $.say(player.id, '안녕하세요, ' + player.nickname + '님!');&#10;});"
+            ></textarea>
+            <p class="hint">
+              샌드박스(QuickJS)에서 실행됩니다. 사용 가능한 API: <code>$.onEnter(fn)</code>,
+              <code>$.onLeave(fn)</code>, <code>$.onInterval(ms, fn)</code>, <code>$.say(playerId, text)</code>,
+              <code>$.broadcast(text)</code>, <code>$.teleport(playerId, x, y)</code>, <code>$.log(...)</code>.
+              저장 후 서버를 재시작해야 반영됩니다.
+            </p>
           </div>
         </section>
       </div>

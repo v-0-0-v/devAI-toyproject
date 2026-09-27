@@ -17,6 +17,7 @@ const OBJECT_ICONS: Record<MapObject["type"], string> = {
   whiteboard: "🖊️",
   youtube: "📺",
   minigame: "✂️",
+  script: "📜",
 };
 
 interface PlayerVisual {
@@ -202,12 +203,16 @@ export class GameScene extends Phaser.Scene {
 
   private enterObject(obj: MapObject) {
     if (obj.type === "minigame") this.minigame?.enter(obj.id);
-    else this.objectInteraction?.enter(obj);
+    // "script" objects have no client-side UI to open — a ZEP Script's
+    // behavior (see server/src/zepScript.ts) runs entirely server-side and
+    // surfaces through the ordinary chat panel ($.say/$.broadcast), not an
+    // overlay, so there's nothing for objectInteraction to do here.
+    else if (obj.type !== "script") this.objectInteraction?.enter(obj);
   }
 
   private leaveObject(obj: MapObject) {
     if (obj.type === "minigame") this.minigame?.leave();
-    else this.objectInteraction?.leave();
+    else if (obj.type !== "script") this.objectInteraction?.leave();
   }
 
   private tileToPixel(tileX: number, tileY: number) {
