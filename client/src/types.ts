@@ -36,7 +36,6 @@ export interface InitPayload {
     rooms: RoomZone[];
     objects: MapObject[];
   };
-  iceServers: RTCIceServer[];
 }
 
 export interface MovedPayload {
@@ -56,21 +55,6 @@ export interface ProximityJoinedPayload {
 
 export interface ProximityLeftPayload {
   peerId: string;
-}
-
-export interface RelayedOfferPayload {
-  from: string;
-  offer: RTCSessionDescriptionInit;
-}
-
-export interface RelayedAnswerPayload {
-  from: string;
-  answer: RTCSessionDescriptionInit;
-}
-
-export interface RelayedIceCandidatePayload {
-  from: string;
-  candidate: RTCIceCandidateInit;
 }
 
 export type ChatScope = "global" | "nearby";
@@ -138,4 +122,35 @@ export interface AdminReportEntry {
 
 export interface AdminReportsPayload {
   reports: AdminReportEntry[];
+}
+
+// --- mediasoup SFU signaling ------------------------------------------
+// Mirrors server/src/types.ts's SFU payload shapes. RTP-shaped fields are
+// opaque here (`unknown`) — webrtc.ts casts them to mediasoup-client's real
+// types right where it hands them to the Device/Transport APIs.
+export type SfuMediaKind = "audio" | "video";
+
+export interface SfuTransportOptions {
+  id: string;
+  iceParameters: unknown;
+  iceCandidates: unknown;
+  dtlsParameters: unknown;
+}
+
+export interface SfuConsumerOptions {
+  id: string;
+  producerId: string;
+  peerId: string;
+  kind: SfuMediaKind;
+  rtpParameters: unknown;
+}
+
+export interface SfuConsumePeerResult {
+  consumers: SfuConsumerOptions[];
+}
+
+export interface SfuNewProducerPayload {
+  peerId: string;
+  producerId: string;
+  kind: SfuMediaKind;
 }

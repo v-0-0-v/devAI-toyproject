@@ -15,9 +15,10 @@ import {
   randomSpawnPoint,
   roomIdAt,
 } from "./map.js";
-import { buildIceServers } from "./turn.js";
 import { registerMapEditorRoutes } from "./mapEditor.js";
 import { MemoryGameStore, type GameStore } from "./store.js";
+import { initMediasoup, getRouter, createWebRtcTransport } from "./sfu.js";
+import type { Producer, Consumer, WebRtcTransport } from "mediasoup/types";
 import {
   appendWhiteboardStroke,
   clearWhiteboardStrokes,
@@ -29,9 +30,6 @@ import type {
   Direction,
   Player,
   InitPayload,
-  OfferPayload,
-  AnswerPayload,
-  IceCandidatePayload,
   ChatMessagePayload,
   ChatBroadcastPayload,
   ReactionPayload,
@@ -39,6 +37,17 @@ import type {
   ReportPayload,
   RpsChoice,
   AdminBanPayload,
+  SfuCreateTransportPayload,
+  SfuTransportOptions,
+  SfuConnectTransportPayload,
+  SfuProducePayload,
+  SfuProduceResult,
+  SfuConsumePayload,
+  SfuConsumerOptions,
+  SfuConsumePeerPayload,
+  SfuConsumePeerResult,
+  SfuResumeConsumerPayload,
+  SfuCloseConsumersForPeerPayload,
 } from "./types.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
@@ -210,6 +219,49 @@ function cleanupMinigameFor(socketId: string) {
   minigameMatches.delete(matchId);
 }
 
+// --- mediasoup SFU peer state (per-instance, in-memory only) --------------
+// Same accepted limitation as the minigame state above: transports/producers/
+// consumers live on a specific worker process and aren't part of GameStore,
+// so in a horizontally-scaled (Redis) deployment, media only flows between
+// peers whose sockets land on the same instance.
+interface SfuPeerState {
+  rtpCapabilities?: unknown; // client's mediasoup-client Device.rtpCapabilities
+  sendTransport?: WebRtcTransport;
+  recvTransport?: WebRtcTransport;
+  producers: Map<"audio" | "video", Producer>;
+  consumers: Map<string, Consumer>; // consumerId -> Consumer
+}
+const sfuPeers = new Map<string, SfuPeerState>(); // socket id -> state
+const sfuProducerOwners = new Map<string, string>(); // producerId -> owning socket id
+
+function getOrCreateSfuPeer(socketId: string): SfuPeerState {
+  let peer = sfuPeers.get(socketId);
+  if (!peer) {
+    peer = { producers: new Map(), consumers: new Map() };
+    sfuPeers.set(socketId, peer);
+  }
+  return peer;
+}
+
+function findSfuTransport(peer: SfuPeerState, transportId: string): WebRtcTransport | undefined {
+  if (peer.sendTransport?.id === transportId) return peer.sendTransport;
+  if (peer.recvTransport?.id === transportId) return peer.recvTransport;
+  return undefined;
+}
+
+function cleanupSfuPeer(socketId: string) {
+  const peer = sfuPeers.get(socketId);
+  if (!peer) return;
+  for (const producer of peer.producers.values()) {
+    sfuProducerOwners.delete(producer.id);
+    producer.close();
+  }
+  for (const consumer of peer.consumers.values()) consumer.close();
+  peer.sendTransport?.close();
+  peer.recvTransport?.close();
+  sfuPeers.delete(socketId);
+}
+
 io.on("connection", async (socket) => {
   await store.setSocketIp(socket.id, getClientIp(socket));
   if (await store.isBannedIp(getClientIp(socket))) {
@@ -264,7 +316,6 @@ io.on("connection", async (socket) => {
           rooms: ROOMS,
           objects: OBJECTS,
         },
-        iceServers: buildIceServers(socket.id),
       };
       socket.emit("init", initPayload);
       socket.broadcast.emit("player-joined", player);
@@ -292,23 +343,203 @@ io.on("connection", async (socket) => {
     })
   );
 
-  // WebRTC signaling relay: the server never inspects offers/answers/ICE
-  // candidates, it just forwards them to the intended peer by socket id.
-  // Works across horizontally-scaled instances once the Redis adapter is
-  // configured (see main()), since `io.to(id)` is adapter-aware.
-  socket.on("webrtc-offer", ({ to, offer }: OfferPayload) => {
-    if (typeof to !== "string") return;
-    io.to(to).emit("webrtc-offer", { from: socket.id, offer });
+  // --- mediasoup SFU signaling -------------------------------------------
+  // Replaces the old per-pair WebRTC offer/answer/ICE relay (see sfu.ts's
+  // doc comment). Request/response shaped, so these use Socket.IO acks
+  // rather than fire-and-forget emits.
+  socket.on("sfu-get-rtp-capabilities", (_payload: unknown, callback: (rtpCapabilities: unknown) => void) => {
+    callback(getRouter().rtpCapabilities);
   });
 
-  socket.on("webrtc-answer", ({ to, answer }: AnswerPayload) => {
-    if (typeof to !== "string") return;
-    io.to(to).emit("webrtc-answer", { from: socket.id, answer });
+  socket.on("sfu-set-rtp-capabilities", (rtpCapabilities: unknown, callback: (res: { ok: boolean }) => void) => {
+    getOrCreateSfuPeer(socket.id).rtpCapabilities = rtpCapabilities;
+    callback({ ok: true });
   });
 
-  socket.on("webrtc-ice-candidate", ({ to, candidate }: IceCandidatePayload) => {
-    if (typeof to !== "string") return;
-    io.to(to).emit("webrtc-ice-candidate", { from: socket.id, candidate });
+  // Every handler below that calls into mediasoup wraps the call in
+  // try/catch: mediasoup throws on malformed input (a bad dtlsParameters/
+  // rtpParameters shape from a buggy or malicious client), and an exception
+  // inside an async Socket.IO handler becomes an unhandled promise rejection
+  // — which crashes the whole Node process by default, taking down every
+  // connected player over one bad payload. Every other handler in this file
+  // instead validates shape before trusting it; mediasoup's own inputs are
+  // opaque RTP structures this server can't shape-check itself, so the only
+  // guard available here is catching what mediasoup rejects with.
+  socket.on(
+    "sfu-create-transport",
+    async (raw: unknown, callback: (options: SfuTransportOptions | null) => void) => {
+      const direction = (raw as Partial<SfuCreateTransportPayload> | null)?.direction;
+      if (direction !== "send" && direction !== "recv") {
+        callback(null);
+        return;
+      }
+      try {
+        const transport = await createWebRtcTransport();
+        const peer = getOrCreateSfuPeer(socket.id);
+        if (direction === "send") peer.sendTransport = transport;
+        else peer.recvTransport = transport;
+        callback({
+          id: transport.id,
+          iceParameters: transport.iceParameters,
+          iceCandidates: transport.iceCandidates,
+          dtlsParameters: transport.dtlsParameters,
+        });
+      } catch (err) {
+        console.warn(`[sfu] create-transport failed for ${socket.id}:`, err);
+        callback(null);
+      }
+    }
+  );
+
+  socket.on("sfu-connect-transport", async (raw: unknown, callback: (res: { ok: boolean }) => void) => {
+    const payload = raw as Partial<SfuConnectTransportPayload> | null;
+    const peer = sfuPeers.get(socket.id);
+    const transport = peer && payload?.transportId ? findSfuTransport(peer, payload.transportId) : undefined;
+    if (!transport || !payload) {
+      callback({ ok: false });
+      return;
+    }
+    try {
+      await transport.connect({ dtlsParameters: payload.dtlsParameters as any });
+      callback({ ok: true });
+    } catch (err) {
+      console.warn(`[sfu] connect-transport failed for ${socket.id}:`, err);
+      callback({ ok: false });
+    }
+  });
+
+  socket.on("sfu-produce", async (raw: unknown, callback: (res: SfuProduceResult | null) => void) => {
+    const payload = raw as Partial<SfuProducePayload> | null;
+    const peer = sfuPeers.get(socket.id);
+    const transport = peer && payload?.transportId ? findSfuTransport(peer, payload.transportId) : undefined;
+    if (!transport || !peer || !payload || (payload.kind !== "audio" && payload.kind !== "video")) {
+      callback(null);
+      return;
+    }
+
+    let producer: Producer;
+    try {
+      producer = await transport.produce({ kind: payload.kind, rtpParameters: payload.rtpParameters as any });
+    } catch (err) {
+      console.warn(`[sfu] produce failed for ${socket.id}:`, err);
+      callback(null);
+      return;
+    }
+    peer.producers.set(payload.kind, producer);
+    sfuProducerOwners.set(producer.id, socket.id);
+    callback({ id: producer.id });
+
+    // Tell whoever already has a call/video-tile open with us (existing
+    // call-pairs from proximity) about this new producer, so a producer that
+    // finishes initializing slightly after proximity-joined already fired
+    // still reaches them — matches what an offer would've done in the old
+    // P2P flow.
+    for (const key of await store.allCallPairs()) {
+      const [a, b] = key.split("|");
+      if (a !== socket.id && b !== socket.id) continue;
+      const otherId = a === socket.id ? b : a;
+      io.to(otherId).emit("sfu-new-producer", { peerId: socket.id, producerId: producer.id, kind: payload.kind });
+    }
+  });
+
+  socket.on("sfu-consume", async (raw: unknown, callback: (res: SfuConsumerOptions | null) => void) => {
+    const payload = raw as Partial<SfuConsumePayload> | null;
+    const peer = sfuPeers.get(socket.id);
+    const producerId = payload?.producerId;
+    const ownerId = producerId ? sfuProducerOwners.get(producerId) : undefined;
+    if (!peer?.recvTransport || !producerId || !ownerId || !peer.rtpCapabilities) {
+      callback(null);
+      return;
+    }
+    if (!getRouter().canConsume({ producerId, rtpCapabilities: peer.rtpCapabilities as any })) {
+      callback(null);
+      return;
+    }
+
+    try {
+      const consumer = await peer.recvTransport.consume({
+        producerId,
+        rtpCapabilities: peer.rtpCapabilities as any,
+        paused: true,
+      });
+      peer.consumers.set(consumer.id, consumer);
+      callback({
+        id: consumer.id,
+        producerId,
+        peerId: ownerId,
+        kind: consumer.kind as "audio" | "video",
+        rtpParameters: consumer.rtpParameters,
+      });
+    } catch (err) {
+      console.warn(`[sfu] consume failed for ${socket.id}:`, err);
+      callback(null);
+    }
+  });
+
+  socket.on("sfu-consume-peer", async (raw: unknown, callback: (res: SfuConsumePeerResult) => void) => {
+    const payload = raw as Partial<SfuConsumePeerPayload> | null;
+    const peer = sfuPeers.get(socket.id);
+    const targetId = payload?.peerId;
+    const targetPeer = targetId ? sfuPeers.get(targetId) : undefined;
+    if (!peer?.recvTransport || !targetPeer || !peer.rtpCapabilities) {
+      callback({ consumers: [] });
+      return;
+    }
+
+    const results: SfuConsumerOptions[] = [];
+    for (const producer of targetPeer.producers.values()) {
+      if (!getRouter().canConsume({ producerId: producer.id, rtpCapabilities: peer.rtpCapabilities as any })) continue;
+      try {
+        const consumer = await peer.recvTransport.consume({
+          producerId: producer.id,
+          rtpCapabilities: peer.rtpCapabilities as any,
+          paused: true,
+        });
+        peer.consumers.set(consumer.id, consumer);
+        results.push({
+          id: consumer.id,
+          producerId: producer.id,
+          peerId: targetId!,
+          kind: consumer.kind as "audio" | "video",
+          rtpParameters: consumer.rtpParameters,
+        });
+      } catch (err) {
+        console.warn(`[sfu] consume-peer failed for ${socket.id} (producer ${producer.id}):`, err);
+      }
+    }
+    callback({ consumers: results });
+  });
+
+  socket.on("sfu-resume-consumer", async (raw: unknown, callback: (res: { ok: boolean }) => void) => {
+    const payload = raw as Partial<SfuResumeConsumerPayload> | null;
+    const consumer = payload?.consumerId ? sfuPeers.get(socket.id)?.consumers.get(payload.consumerId) : undefined;
+    if (!consumer) {
+      callback({ ok: false });
+      return;
+    }
+    try {
+      await consumer.resume();
+      callback({ ok: true });
+    } catch (err) {
+      console.warn(`[sfu] resume-consumer failed for ${socket.id}:`, err);
+      callback({ ok: false });
+    }
+  });
+
+  socket.on("sfu-close-consumers-for-peer", (raw: unknown, callback: (res: { ok: boolean }) => void) => {
+    const payload = raw as Partial<SfuCloseConsumersForPeerPayload> | null;
+    const peer = sfuPeers.get(socket.id);
+    if (!peer || !payload?.peerId) {
+      callback({ ok: false });
+      return;
+    }
+    for (const [id, consumer] of [...peer.consumers]) {
+      if (sfuProducerOwners.get(consumer.producerId) === payload.peerId) {
+        consumer.close();
+        peer.consumers.delete(id);
+      }
+    }
+    callback({ ok: true });
   });
 
   // Chat: "global" reaches everyone, "nearby" reaches only players currently
@@ -521,6 +752,7 @@ io.on("connection", async (socket) => {
 
   socket.on("disconnect", () =>
     withLock(async () => {
+      cleanupSfuPeer(socket.id);
       if (!(await store.getPlayer(socket.id))) return;
       cleanupMinigameFor(socket.id);
       await endAllCallsFor(socket.id);
@@ -532,6 +764,8 @@ io.on("connection", async (socket) => {
 });
 
 async function main() {
+  await initMediasoup();
+
   const redisUrl = process.env.REDIS_URL;
   if (redisUrl) {
     const [{ Redis }, { createAdapter }, { RedisGameStore }] = await Promise.all([

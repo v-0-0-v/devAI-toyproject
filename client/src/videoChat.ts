@@ -15,8 +15,10 @@ interface VideoTile {
 
 /**
  * Owns the local camera/mic stream, the video tile bar (DOM overlay on top
- * of the Phaser canvas), and a WebRTCManager that starts/stops one
- * RTCPeerConnection per nearby player based on server "proximity-*" events.
+ * of the Phaser canvas), and a WebRTCManager that starts/stops consuming a
+ * nearby player's media through the mediasoup SFU based on server
+ * "proximity-*" events (see webrtc.ts's doc comment for the SFU model —
+ * this class doesn't know or care that it's not raw P2P underneath).
  *
  * Also renders remote audio through a Web Audio spatial graph (distance-based
  * volume + stereo panning, like ZEP/Gather) instead of playing it directly
@@ -74,17 +76,6 @@ export class VideoChat {
       this.webrtc?.startCall(payload.peerId);
     });
     network.on("proximity-left", (payload) => this.webrtc?.closePeer(payload.peerId));
-
-    network.on("webrtc-offer", async ({ from, offer }) => {
-      if (this.moderation.isBlocked(from)) return;
-      await this.webrtc?.handleOffer(from, offer);
-    });
-    network.on("webrtc-answer", async ({ from, answer }) => {
-      await this.webrtc?.handleAnswer(from, answer);
-    });
-    network.on("webrtc-ice-candidate", async ({ from, candidate }) => {
-      await this.webrtc?.handleIceCandidate(from, candidate);
-    });
   }
 
   private handleInit(payload: InitPayload) {
@@ -98,7 +89,6 @@ export class VideoChat {
       onRemoteStream: (peerId, stream) => this.showRemoteStream(peerId, stream),
       onCallEnded: (peerId) => this.removeTile(peerId),
     });
-    this.webrtc.setIceServers(payload.iceServers);
     this.webrtc.setLocalStream(this.localStream);
   }
 

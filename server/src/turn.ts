@@ -1,5 +1,16 @@
 import crypto from "node:crypto";
-import type { IceServerConfig } from "./types.js";
+
+// No longer called from index.ts: mediasoup's WebRtcTransport (see sfu.ts)
+// replaces the P2P NAT-traversal problem this solved — the server is always
+// one side of every connection now, so there's no peer-to-peer path that
+// needs a TURN relay. Kept unreferenced rather than deleted, along with the
+// coturn deployment files, pending a separate decision on removing that
+// infrastructure entirely (see README).
+export interface IceServerConfig {
+  urls: string | string[];
+  username?: string;
+  credential?: string;
+}
 
 const TURN_SECRET = process.env.TURN_SECRET;
 const TURN_URLS = (process.env.TURN_URLS ?? "")

@@ -15,10 +15,12 @@ import type {
   ProximityJoinedPayload,
   ProximityLeftPayload,
   ReactionBroadcastPayload,
-  RelayedAnswerPayload,
-  RelayedIceCandidatePayload,
-  RelayedOfferPayload,
   RpsChoice,
+  SfuConsumePeerResult,
+  SfuConsumerOptions,
+  SfuMediaKind,
+  SfuNewProducerPayload,
+  SfuTransportOptions,
   WhiteboardClearPayload,
   WhiteboardHistoryPayload,
   WhiteboardStroke,
@@ -39,9 +41,7 @@ interface ServerEvents {
   "player-left": LeftPayload;
   "proximity-joined": ProximityJoinedPayload;
   "proximity-left": ProximityLeftPayload;
-  "webrtc-offer": RelayedOfferPayload;
-  "webrtc-answer": RelayedAnswerPayload;
-  "webrtc-ice-candidate": RelayedIceCandidatePayload;
+  "sfu-new-producer": SfuNewProducerPayload;
   "chat-message": ChatBroadcastPayload;
   reaction: ReactionBroadcastPayload;
   "whiteboard-draw": WhiteboardStroke;
@@ -65,9 +65,7 @@ const EVENT_NAMES = [
   "player-left",
   "proximity-joined",
   "proximity-left",
-  "webrtc-offer",
-  "webrtc-answer",
-  "webrtc-ice-candidate",
+  "sfu-new-producer",
   "chat-message",
   "reaction",
   "whiteboard-draw",
@@ -96,9 +94,7 @@ export class Network {
     "player-left": new Set(),
     "proximity-joined": new Set(),
     "proximity-left": new Set(),
-    "webrtc-offer": new Set(),
-    "webrtc-answer": new Set(),
-    "webrtc-ice-candidate": new Set(),
+    "sfu-new-producer": new Set(),
     "chat-message": new Set(),
     reaction: new Set(),
     "whiteboard-draw": new Set(),
@@ -141,16 +137,43 @@ export class Network {
     this.socket.emit("move", direction);
   }
 
-  sendOffer(to: string, offer: RTCSessionDescriptionInit) {
-    this.socket.emit("webrtc-offer", { to, offer });
+  // --- mediasoup SFU signaling (see webrtc.ts) ---------------------------
+  // Request/response shaped, so these use Socket.IO's ack-based
+  // emitWithAck() instead of the fire-and-forget pattern used elsewhere.
+  sfuGetRouterRtpCapabilities(): Promise<unknown> {
+    return this.socket.emitWithAck("sfu-get-rtp-capabilities", null);
   }
 
-  sendAnswer(to: string, answer: RTCSessionDescriptionInit) {
-    this.socket.emit("webrtc-answer", { to, answer });
+  sfuSetRtpCapabilities(rtpCapabilities: unknown): Promise<{ ok: boolean }> {
+    return this.socket.emitWithAck("sfu-set-rtp-capabilities", rtpCapabilities);
   }
 
-  sendIceCandidate(to: string, candidate: RTCIceCandidateInit) {
-    this.socket.emit("webrtc-ice-candidate", { to, candidate });
+  sfuCreateTransport(direction: "send" | "recv"): Promise<SfuTransportOptions | null> {
+    return this.socket.emitWithAck("sfu-create-transport", { direction });
+  }
+
+  sfuConnectTransport(transportId: string, dtlsParameters: unknown): Promise<{ ok: boolean }> {
+    return this.socket.emitWithAck("sfu-connect-transport", { transportId, dtlsParameters });
+  }
+
+  sfuProduce(transportId: string, kind: SfuMediaKind, rtpParameters: unknown): Promise<{ id: string } | null> {
+    return this.socket.emitWithAck("sfu-produce", { transportId, kind, rtpParameters });
+  }
+
+  sfuConsume(producerId: string): Promise<SfuConsumerOptions | null> {
+    return this.socket.emitWithAck("sfu-consume", { producerId });
+  }
+
+  sfuConsumePeer(peerId: string): Promise<SfuConsumePeerResult> {
+    return this.socket.emitWithAck("sfu-consume-peer", { peerId });
+  }
+
+  sfuResumeConsumer(consumerId: string): Promise<{ ok: boolean }> {
+    return this.socket.emitWithAck("sfu-resume-consumer", { consumerId });
+  }
+
+  sfuCloseConsumersForPeer(peerId: string): Promise<{ ok: boolean }> {
+    return this.socket.emitWithAck("sfu-close-consumers-for-peer", { peerId });
   }
 
   sendChatMessage(scope: ChatScope, text: string) {

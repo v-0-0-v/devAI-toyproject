@@ -1,10 +1,16 @@
 # Production stack: Caddy (TLS + static client + reverse proxy) + the
-# Socket.IO server + coturn (TURN, TLS). Run with:
+# Socket.IO/mediasoup server + coturn. Run with:
 #
 #   docker compose -f docker-compose.prod.yml --env-file server/.env.production up -d --build
 #
 # See deploy/DEPLOY.md for the full one-time VPS setup (DNS, firewall, the
 # certbot cert coturn needs, systemd unit).
+#
+# Video chat's media now goes through mediasoup (server/src/sfu.ts), not
+# coturn — the server is always one side of the connection, so there's no
+# P2P NAT-traversal problem left for TURN to solve. coturn is kept here
+# unused rather than removed (see README); the server's mediasoup port range
+# below is what video chat actually depends on now.
 
 services:
   caddy:
@@ -32,8 +38,16 @@ services:
     restart: unless-stopped
     env_file:
       - server/.env.production
-    # No published ports: only reachable through the caddy reverse proxy,
-    # over the default compose network, as "server:3001".
+    # Port 3001 itself isn't published — that's only reachable through the
+    # caddy reverse proxy, over the default compose network, as "server:3001".
+    # The mediasoup RTP port range below is different: it's real-time media
+    # (UDP/TCP), which Caddy can't proxy, so the browser must reach it
+    # directly on the VPS's public IP — hence a direct host:container
+    # mapping here, matching MEDIASOUP_MIN_PORT/MEDIASOUP_MAX_PORT exactly
+    # (see server/.env.production's MEDIASOUP_* vars).
+    ports:
+      - "40000-40100:40000-40100/udp"
+      - "40000-40100:40000-40100/tcp"
     volumes:
       # SQLite persistence (whiteboard strokes + reports) — without this the
       # data still survives a process restart but not a container recreation.

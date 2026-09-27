@@ -1,28 +1,32 @@
 # 실제 배포 가이드
 
-`docker-compose.prod.yml` 하나로 3개 컨테이너(Caddy + 서버 + coturn)를 VPS 한 대에 올리는 구성입니다.
+`docker-compose.prod.yml` 하나로 컨테이너들(Caddy + 서버 + coturn)을 VPS 한 대에 올리는 구성입니다.
 
 ```
-인터넷 ── 443/80 ──▶ Caddy (TLS 자동 발급, 정적 클라이언트 서빙, /socket.io → server 프록시)
+인터넷 ── 443/80 ──▶ Caddy (TLS 자동 발급, 정적 클라이언트 서빙, /socket.io + /api → server 프록시)
                           │
-                          └──▶ server (Socket.IO, 내부 전용, 외부 미노출)
+                          └──▶ server (Socket.IO 시그널링, 내부 전용, 외부 미노출)
 
+인터넷 ── 40000-40100/udp+tcp ──▶ server (mediasoup, 화상채팅 실제 미디어 — 아래 참고)
+
+(선택, 더 이상 앱이 사용하지 않음)
 인터넷 ── 3478/5349 (+relay UDP) ──▶ coturn (host network, 자체 TLS)
 ```
 
-Caddy와 server는 도커 브리지 네트워크로만 통신하므로 클라이언트-서버가 같은 오리진(HTTPS 도메인)이 되어 CORS 걱정이 없습니다. coturn은 NAT 트래버설 특성상 host network를 사용합니다.
+Caddy와 server는 도커 브리지 네트워크로만 통신하므로 클라이언트-서버가 같은 오리진(HTTPS 도메인)이 되어 CORS 걱정이 없습니다. **화상채팅의 실제 미디어(RTP)는 mediasoup을 통해 서버가 직접 중계**하는데, 이건 실시간 UDP/TCP라 Caddy가 프록시할 수 없으므로 `docker-compose.prod.yml`이 server 컨테이너에 해당 포트 범위를 직접 발행합니다. coturn은 예전 P2P 구조에서 NAT 트래버설용으로 쓰였던 것으로, mediasoup 도입 이후로는 앱이 더 이상 사용하지 않습니다 (README 참고) — 아직 저장소에는 남아 있지만 배포에 필수는 아닙니다.
 
 ## 0. 사전 준비물
 
 - Ubuntu 22.04/24.04 등 리눅스 VPS 1대, Docker Engine + Docker Compose plugin 설치됨
-- 도메인 2개(또는 서브도메인 2개), 둘 다 이 VPS의 공인 IP로 A 레코드 지정
+- 도메인(또는 서브도메인), 이 VPS의 공인 IP로 A 레코드 지정
   - 앱 도메인: 예) `app.example.com`
-  - TURN 도메인: 예) `turn.example.com`
+  - (coturn을 그대로 쓰고 싶다면) TURN 도메인: 예) `turn.example.com`
 - 방화벽에서 열어야 하는 포트
   - `80/tcp`, `443/tcp` — Caddy (HTTP→HTTPS 리다이렉트 + ACME + 앱)
-  - `3478/udp`, `3478/tcp` — TURN
-  - `5349/tcp`, `5349/udp` — TURNS (TLS/DTLS)
-  - `49152-49452/udp` — TURN 릴레이 포트 범위 (`turnserver.prod.conf`의 `min-port`/`max-port`와 반드시 일치시킬 것)
+  - `40000-40100/udp`, `40000-40100/tcp` — **mediasoup 화상채팅 미디어** (`MEDIASOUP_MIN_PORT`/`MEDIASOUP_MAX_PORT`, `docker-compose.prod.yml`의 포트 매핑과 반드시 일치시킬 것 — 이게 안 맞으면 화상채팅이 조용히 실패함)
+  - (coturn을 쓸 경우에만) `3478/udp`, `3478/tcp` — TURN
+  - (coturn을 쓸 경우에만) `5349/tcp`, `5349/udp` — TURNS (TLS/DTLS)
+  - (coturn을 쓸 경우에만) `49152-49452/udp` — TURN 릴레이 포트 범위 (`turnserver.prod.conf`의 `min-port`/`max-port`와 반드시 일치시킬 것)
 
 ## 1. 저장소 배치
 
@@ -45,11 +49,14 @@ cp server/.env.production.example server/.env.production
 | `APP_DOMAIN` | 앱 도메인 (예: `app.example.com`) |
 | `CLIENT_ORIGIN` | `https://` + 앱 도메인 |
 | `ACME_EMAIL` | Let's Encrypt 알림 받을 이메일 |
-| `TURN_DOMAIN` | TURN 도메인 (예: `turn.example.com`) |
-| `TURN_SECRET` | `openssl rand -hex 32` 로 생성한 강력한 랜덤값 |
-| `TURN_URLS` | 기본값 그대로 두되 도메인만 실제 값으로 교체 |
+| `MEDIASOUP_ANNOUNCED_IP` | **이 VPS의 공인 IP** (도메인이 아니라 IP 자체 — mediasoup이 ICE candidate에 그대로 실어 보냄). 빠뜨리면 화상채팅이 조용히 안 됨 |
+| `TURN_DOMAIN` | (coturn을 쓸 경우) TURN 도메인 (예: `turn.example.com`) |
+| `TURN_SECRET` | (coturn을 쓸 경우) `openssl rand -hex 32` 로 생성한 강력한 랜덤값 |
+| `TURN_URLS` | (coturn을 쓸 경우) 기본값 그대로 두되 도메인만 실제 값으로 교체 |
 
-## 3. TURN 도메인용 TLS 인증서 발급 (certbot)
+## 3. TURN 도메인용 TLS 인증서 발급 (certbot) — 선택 사항
+
+> coturn을 쓰지 않을 거라면(대부분의 경우 그렇습니다 — 화상채팅은 mediasoup만으로 동작합니다) 이 섹션 전체와 `docker-compose.prod.yml`의 `coturn` 서비스를 건너뛰어도 됩니다.
 
 coturn은 Caddy처럼 인증서를 자동 발급하지 않으므로, 별도로 certbot을 host(컨테이너 밖)에 설치해 발급합니다. **이 시점엔 아직 아무것도 80번 포트를 쓰고 있지 않아야** `--standalone` 모드가 동작합니다 (Caddy는 아직 시작 전).
 

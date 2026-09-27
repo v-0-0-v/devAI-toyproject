@@ -1,6 +1,7 @@
+import { Device } from "mediasoup-client";
+import type { Transport, Producer, Consumer } from "mediasoup-client/types";
 import type { Network } from "./network";
-
-const DEFAULT_ICE_SERVERS: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
+import type { SfuMediaKind } from "./types";
 
 export interface WebRTCCallbacks {
   onRemoteStream: (peerId: string, stream: MediaStream) => void;
@@ -8,140 +9,184 @@ export interface WebRTCCallbacks {
 }
 
 /**
- * One RTCPeerConnection per nearby peer. Signaling (offer/answer/ICE) is
- * relayed through the Socket.IO server, which never inspects the payloads.
+ * Sends this client's camera/mic to the server exactly once, through a
+ * mediasoup SFU (see server/src/sfu.ts's doc comment for why), and consumes
+ * whichever other players are currently "in a call" with us per server
+ * "proximity-joined"/"proximity-left" events. This replaces the old design
+ * of one RTCPeerConnection per nearby peer — there is no P2P connection
+ * anymore, the server always relays, so NAT traversal between two clients is
+ * no longer this app's problem (which is also why TURN/coturn is no longer
+ * wired into this path).
  *
- * To avoid glare (both sides creating an offer at once), only the peer with
- * the lexicographically smaller socket id initiates — the other side just
- * waits for an offer and answers it.
+ * The public API is intentionally unchanged from the old P2P version
+ * (startCall/closePeer/closeAll/setLocalStream/startScreenShare/
+ * stopScreenShare, the same onRemoteStream/onCallEnded callbacks) so
+ * videoChat.ts needed almost no changes beyond removing the old
+ * webrtc-offer/answer/ice-candidate wiring.
  */
 export class WebRTCManager {
-  private peers = new Map<string, RTCPeerConnection>();
+  private device = new Device();
+  private sendTransport: Transport | null = null;
+  private recvTransport: Transport | null = null;
+  private producers = new Map<SfuMediaKind, Producer>();
+  private consumers = new Map<string, Consumer>(); // consumerId -> Consumer
+  private consumersByPeer = new Map<string, Set<string>>(); // peerId -> consumerIds
+  private remoteStreams = new Map<string, MediaStream>(); // peerId -> combined stream
   private localStream: MediaStream | null = null;
-  private iceServers: RTCIceServer[] = DEFAULT_ICE_SERVERS;
-  // The video track currently being sent (camera by default, screen while
-  // sharing). Swapped in-place via RTCRtpSender.replaceTrack(), which — unlike
-  // adding a second track — needs no renegotiation, so screen share can toggle
-  // mid-call without a fresh offer/answer round trip.
   private cameraVideoTrack: MediaStreamTrack | null = null;
-  private screenVideoTrack: MediaStreamTrack | null = null;
+  private ready: Promise<void>;
 
   constructor(
     private network: Network,
-    private selfId: string,
+    _selfId: string,
     private callbacks: WebRTCCallbacks
-  ) {}
+  ) {
+    this.ready = this.init();
+
+    // A producer that starts a moment after proximity-joined already fired
+    // (e.g. this peer's own camera was still initializing) wouldn't
+    // otherwise reach us — the server pushes it explicitly instead.
+    this.network.on("sfu-new-producer", ({ peerId, producerId }) => {
+      void this.consumeOne(peerId, producerId);
+    });
+  }
+
+  private async init() {
+    const rtpCapabilities = await this.network.sfuGetRouterRtpCapabilities();
+    await this.device.load({
+      routerRtpCapabilities: rtpCapabilities as Parameters<Device["load"]>[0]["routerRtpCapabilities"],
+    });
+    await this.network.sfuSetRtpCapabilities(this.device.recvRtpCapabilities);
+    await Promise.all([this.createSendTransport(), this.createRecvTransport()]);
+    // Transports are ready now — safe to produce directly (unlike
+    // setLocalStream() below, this call isn't waiting on `this.ready`, which
+    // is this very method's own not-yet-resolved promise).
+    await this.produceLocalStream();
+  }
+
+  private async createSendTransport() {
+    const options = await this.network.sfuCreateTransport("send");
+    if (!options) return;
+    const transport = this.device.createSendTransport(options as Parameters<Device["createSendTransport"]>[0]);
+
+    transport.on("connect", ({ dtlsParameters }, callback, errback) => {
+      this.network
+        .sfuConnectTransport(transport.id, dtlsParameters)
+        .then(() => callback())
+        .catch(errback);
+    });
+    transport.on("produce", ({ kind, rtpParameters }, callback, errback) => {
+      this.network
+        .sfuProduce(transport.id, kind as SfuMediaKind, rtpParameters)
+        .then((res) => (res ? callback(res) : errback(new Error("sfu-produce failed"))))
+        .catch(errback);
+    });
+
+    this.sendTransport = transport;
+  }
+
+  private async createRecvTransport() {
+    const options = await this.network.sfuCreateTransport("recv");
+    if (!options) return;
+    const transport = this.device.createRecvTransport(options as Parameters<Device["createRecvTransport"]>[0]);
+
+    transport.on("connect", ({ dtlsParameters }, callback, errback) => {
+      this.network
+        .sfuConnectTransport(transport.id, dtlsParameters)
+        .then(() => callback())
+        .catch(errback);
+    });
+
+    this.recvTransport = transport;
+  }
 
   setLocalStream(stream: MediaStream | null) {
     this.localStream = stream;
     this.cameraVideoTrack = stream?.getVideoTracks()[0] ?? null;
+    // May be called before init() finishes (main.ts sets the stream right
+    // after construction) — wait for transports here rather than inside
+    // produceLocalStream() itself, since init() also calls that method
+    // directly once transports are ready, and awaiting `this.ready` from
+    // within the call that resolves it would deadlock.
+    void this.ready.then(() => this.produceLocalStream());
   }
 
-  /** Replaces the outgoing video track (camera -> screen) on every active peer
-   * connection, and on any created afterwards. */
+  private async produceLocalStream() {
+    if (!this.localStream || !this.sendTransport) return;
+    for (const track of this.localStream.getTracks()) {
+      const kind = track.kind as SfuMediaKind;
+      if (this.producers.has(kind)) continue;
+      const producer = await this.sendTransport.produce({ track });
+      this.producers.set(kind, producer);
+    }
+  }
+
+  /** Starts consuming a peer's current (and any future) producers. */
+  async startCall(peerId: string) {
+    await this.ready;
+    const { consumers } = await this.network.sfuConsumePeer(peerId);
+    for (const c of consumers) await this.applyConsumer(peerId, c);
+  }
+
+  private async consumeOne(peerId: string, producerId: string) {
+    await this.ready;
+    const c = await this.network.sfuConsume(producerId);
+    if (c) await this.applyConsumer(peerId, c);
+  }
+
+  private async applyConsumer(
+    peerId: string,
+    c: { id: string; producerId: string; kind: SfuMediaKind; rtpParameters: unknown }
+  ) {
+    if (!this.recvTransport || this.consumers.has(c.id)) return;
+
+    const consumer = await this.recvTransport.consume({
+      id: c.id,
+      producerId: c.producerId,
+      kind: c.kind,
+      rtpParameters: c.rtpParameters as Parameters<Transport["consume"]>[0]["rtpParameters"],
+    });
+    this.consumers.set(consumer.id, consumer);
+    if (!this.consumersByPeer.has(peerId)) this.consumersByPeer.set(peerId, new Set());
+    this.consumersByPeer.get(peerId)!.add(consumer.id);
+    await this.network.sfuResumeConsumer(consumer.id); // consumers start paused server-side
+
+    let stream = this.remoteStreams.get(peerId);
+    if (!stream) {
+      stream = new MediaStream();
+      this.remoteStreams.set(peerId, stream);
+    }
+    stream.addTrack(consumer.track);
+    this.callbacks.onRemoteStream(peerId, stream);
+  }
+
+  /** Swaps the outgoing video track (camera -> screen) with no renegotiation
+   * — every consumer of this producer picks up the new track transparently. */
   async startScreenShare(track: MediaStreamTrack) {
-    this.screenVideoTrack = track;
-    await this.replaceVideoTrackOnAllPeers(track);
+    const producer = this.producers.get("video");
+    if (producer) await producer.replaceTrack({ track });
   }
 
   async stopScreenShare() {
-    this.screenVideoTrack = null;
-    await this.replaceVideoTrackOnAllPeers(this.cameraVideoTrack);
-  }
-
-  private async replaceVideoTrackOnAllPeers(track: MediaStreamTrack | null) {
-    for (const pc of this.peers.values()) {
-      const sender = pc.getSenders().find((s) => s.track?.kind === "video");
-      if (sender) await sender.replaceTrack(track);
-    }
-  }
-
-  /** Server-provided STUN/TURN list (see server/src/turn.ts). Falls back to
-   * public STUN-only if the server didn't send any (e.g. empty array). */
-  setIceServers(servers: RTCIceServer[]) {
-    if (servers.length > 0) this.iceServers = servers;
-  }
-
-  private isInitiator(peerId: string): boolean {
-    return this.selfId < peerId;
-  }
-
-  private getOrCreatePeer(peerId: string): RTCPeerConnection {
-    const existing = this.peers.get(peerId);
-    if (existing) return existing;
-
-    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
-    this.peers.set(peerId, pc);
-
-    if (this.localStream) {
-      for (const track of this.localStream.getTracks()) {
-        // A peer that joins while screen sharing is active should receive the
-        // screen track from the start, not the camera.
-        const outgoing = track.kind === "video" && this.screenVideoTrack ? this.screenVideoTrack : track;
-        pc.addTrack(outgoing, this.localStream);
-      }
-    }
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        this.network.sendIceCandidate(peerId, event.candidate.toJSON());
-      }
-    };
-
-    pc.ontrack = (event) => {
-      this.callbacks.onRemoteStream(peerId, event.streams[0]);
-    };
-
-    pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "failed" || pc.connectionState === "closed") {
-        this.closePeer(peerId);
-      }
-    };
-
-    return pc;
-  }
-
-  async startCall(peerId: string) {
-    if (!this.isInitiator(peerId)) return; // the other side will send an offer
-    const pc = this.getOrCreatePeer(peerId);
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    this.network.sendOffer(peerId, offer);
-  }
-
-  async handleOffer(peerId: string, offer: RTCSessionDescriptionInit) {
-    const pc = this.getOrCreatePeer(peerId);
-    await pc.setRemoteDescription(offer);
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    this.network.sendAnswer(peerId, answer);
-  }
-
-  async handleAnswer(peerId: string, answer: RTCSessionDescriptionInit) {
-    const pc = this.peers.get(peerId);
-    if (!pc) return;
-    await pc.setRemoteDescription(answer);
-  }
-
-  async handleIceCandidate(peerId: string, candidate: RTCIceCandidateInit) {
-    const pc = this.peers.get(peerId);
-    if (!pc) return;
-    try {
-      await pc.addIceCandidate(candidate);
-    } catch (err) {
-      console.warn(`[webrtc] failed to add ICE candidate from ${peerId}`, err);
-    }
+    const producer = this.producers.get("video");
+    if (producer) await producer.replaceTrack({ track: this.cameraVideoTrack });
   }
 
   closePeer(peerId: string) {
-    const pc = this.peers.get(peerId);
-    if (!pc) return;
-    pc.close();
-    this.peers.delete(peerId);
+    const ids = this.consumersByPeer.get(peerId);
+    if (ids) {
+      for (const id of ids) {
+        this.consumers.get(id)?.close();
+        this.consumers.delete(id);
+      }
+      this.consumersByPeer.delete(peerId);
+    }
+    this.remoteStreams.delete(peerId);
+    void this.network.sfuCloseConsumersForPeer(peerId);
     this.callbacks.onCallEnded(peerId);
   }
 
   closeAll() {
-    for (const peerId of [...this.peers.keys()]) this.closePeer(peerId);
+    for (const peerId of [...this.consumersByPeer.keys()]) this.closePeer(peerId);
   }
 }

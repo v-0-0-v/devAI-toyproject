@@ -9,15 +9,13 @@
 - WebSocket(Socket.IO) 기반 실시간 멀티플레이어 위치 동기화
   - 접속 시 닉네임 입력 → 랜덤 스폰
   - 다른 플레이어의 이동/입장/퇴장이 실시간으로 반영
-- **근접 기반 화상/음성 채팅 (WebRTC)**
+- **근접 기반 화상/음성 채팅 (mediasoup SFU)**
   - 아바타 간 거리가 3타일 이내로 가까워지면 서버가 감지해 자동으로 화상채팅 연결을 시작하고, 멀어지면 자동 종료
-  - 시그널링(offer/answer/ICE candidate)은 Socket.IO로 중계, 실제 미디어는 WebRTC로 직접(P2P) 또는 TURN 경유로 전송
+  - 각 클라이언트는 자신의 카메라/마이크를 서버(mediasoup)로 딱 한 번만 전송(Producer)하고, 서버가 근처에 있는 다른 클라이언트에게 그걸 중계(Consumer)함 — 참가자 쌍마다 별도 연결을 맺던 이전 P2P 방식과 달리 대역폭이 참가자 수에 비례해서만 늘어남
+  - 서버가 항상 연결의 한쪽 끝이라 클라이언트 간 NAT 트래버설 문제 자체가 없음(TURN 불필요) — 대신 서버 자신의 미디어 포트(UDP/TCP)가 클라이언트에서 직접 도달 가능해야 함 (`server/src/sfu.ts`, 배포 시 `MEDIASOUP_ANNOUNCED_IP` 필요 — 아래 참고)
   - 화면 상단 비디오 바에 내 화면 + 근처 참가자 화면 타일 표시, 마이크/카메라 개별 on-off 토글
   - 카메라/마이크 권한이 없어도 게임 자체는 정상 동작 (수신만 되거나 완전히 비활성)
-- **TURN 서버 (coturn)**
-  - STUN만으로는 연결이 안 되는 네트워크(대칭형 NAT, 엄격한 사내망 방화벽 등)를 위한 릴레이
-  - 서버가 접속마다 coturn REST API 방식의 시간 제한 크리덴셜(HMAC-SHA1)을 발급해 클라이언트에 전달 — 정적 비밀번호를 클라이언트에 노출하지 않음
-  - TURN 미설정 시(로컬 `.env` 없음) 자동으로 STUN-only로 폴백, 앱 자체는 그대로 동작
+  - 수평 확장(Redis) 구성에서는 미니게임과 같은 이유로 인스턴스별 로컬 상태 — 두 플레이어가 같은 인스턴스에 붙어야 미디어가 오감
 - **공간 음향 (Spatial Audio)**
   - 근접 화상채팅의 오디오는 `<video>` 태그로 직접 재생하지 않고 Web Audio API(`PannerNode`)로 라우팅 — 상대와의 타일 거리에 비례해 볼륨이 줄고 좌우 방향에 따라 패닝됨 (ZEP/Gather와 동일한 방식)
 - **텍스트 채팅 (전체 / 근처)**
@@ -68,24 +66,27 @@
 
 ```
 zep-mini-mvp/
-├── docker-compose.yml       # 로컬 개발용: coturn만 (STUN-only로도 동작하니 선택 사항)
-├── docker-compose.prod.yml  # 실제 배포용: Caddy(TLS) + server + coturn(TLS) 전체 스택
-├── turnserver.conf          # coturn 개발용 설정 (TLS 없음)
-├── turnserver.prod.conf     # coturn 배포용 설정 (TLS, 넓은 릴레이 포트 범위)
+├── docker-compose.yml       # 로컬 개발용 coturn (더 이상 앱이 쓰지 않음 — 아래 참고, 실행 자체가 선택)
+├── docker-compose.prod.yml  # 실제 배포용: Caddy(TLS) + server(mediasoup 포함) + coturn(선택) 전체 스택
+├── turnserver.conf          # coturn 개발용 설정 (더 이상 앱이 쓰지 않음)
+├── turnserver.prod.conf     # coturn 배포용 설정 (더 이상 앱이 쓰지 않음)
 ├── deploy/                  # 배포 가이드, Caddyfile, systemd 유닛, certbot 갱신 훅
 ├── .github/workflows/ci.yml # 서버/클라이언트 빌드+스모크테스트, Docker 이미지 빌드 검증
-├── server/   # Node.js + TypeScript + Express + Socket.IO (+ Dockerfile)
+├── server/   # Node.js + TypeScript + Express + Socket.IO + mediasoup (+ Dockerfile)
 │             # 권위 서버: 이동 검증/브로드캐스트, 근접 판정, 채팅/리액션 중계·검증,
-│             # WebRTC 시그널링 중계, TURN 크리덴셜 발급, 미니게임 매칭, 관리자 IP 차단
+│             # mediasoup SFU 시그널링·미디어 중계, 미니게임 매칭, 관리자 IP 차단
+│   ├── sfu.ts         # mediasoup worker/router 생성, WebRtcTransport 팩토리
 │   ├── mapdata.json   # 타일/벽/방/오브젝트 정의 (map.ts가 런타임에 로드)
 │   ├── mapEditor.ts   # GET/POST /api/map — 맵 에디터 저장 API + 검증
 │   ├── persistence.ts # SQLite 영구 저장 (화이트보드 스트로크 + 신고 로그)
+│   ├── turn.ts        # (더 이상 사용 안 함 — 아래 참고) coturn 크리덴셜 발급
 │   ├── store.ts       # GameStore 인터페이스 + 인메모리 구현 (기본값)
 │   └── redisStore.ts  # GameStore의 Redis 구현 (REDIS_URL 설정 시 사용)
 └── client/   # Vite + TypeScript + Phaser 3
     ├── index.html      # 게임 페이지 (main.ts)
     │                   # 타일맵/방/오브젝트 렌더링, 입력, 아바타(scenes/GameScene.ts)
-    │                   # 화상채팅 + 공간음향 + 화면공유(webrtc.ts, videoChat.ts)
+    │                   # mediasoup-client 기반 화상채팅 + 공간음향 + 화면공유
+    │                   #   (webrtc.ts, videoChat.ts)
     │                   # 텍스트 채팅(chat.ts), 모바일 터치 D-패드(touchControls.ts)
     │                   # 화이트보드/유튜브 오브젝트(objectInteraction.ts)
     │                   # 로컬 음소거/차단/신고(moderation.ts)
@@ -95,19 +96,9 @@ zep-mini-mvp/
 
 ## 실행 방법
 
-### 1. (선택) TURN 서버(coturn) 실행
+화상채팅(mediasoup)은 로컬 개발에서 추가 설정 없이 바로 동작합니다 — `server/.env`를 만들 필요조차 없습니다. (coturn 관련 `docker-compose.yml`/`.env`는 더 이상 앱이 쓰지 않는 예전 설정으로, 남겨두기만 했습니다.)
 
-화상채팅은 TURN 없이도 동작하지만(STUN-only 폴백), 일부 네트워크 환경 테스트를 위해 로컬에서 coturn을 띄우려면:
-
-```bash
-cp server/.env.example server/.env
-# server/.env의 TURN_SECRET을 강력한 랜덤값으로 교체 (예: openssl rand -hex 32)
-docker compose up -d
-```
-
-`docker-compose.yml`은 `server/.env`의 `TURN_SECRET`을 coturn 컨테이너에 주입합니다 — Node 서버가 같은 `.env`를 읽어 크리덴셜을 생성하므로 값이 자동으로 일치합니다. `.env`를 만들지 않으면 서버는 자동으로 STUN-only로 동작합니다.
-
-### 2. 서버
+### 1. 서버
 
 ```bash
 cd server
@@ -115,7 +106,7 @@ npm install
 npm run dev   # http://localhost:3001
 ```
 
-### 3. 클라이언트
+### 2. 클라이언트
 
 ```bash
 cd client
@@ -127,13 +118,13 @@ npm run dev   # http://localhost:5173
 
 `ADMIN_TOKEN`을 서버에 설정한 뒤 클라이언트에서 `?admin=토큰`으로 접속하면 좌측 상단에 관리자 패널(접속자 목록 + 차단 버튼 + 신고 로그)이 나타납니다.
 
-### 4. (선택) 맵 에디터
+### 3. (선택) 맵 에디터
 
 `http://localhost:5173/editor.html`에서 현재 맵을 그래픽으로 편집할 수 있습니다 (불러오기는 토큰 없이 가능, 저장은 `ADMIN_TOKEN` 필요). 벽 모드에서 칸을 클릭/드래그해 벽 ↔ 바닥을 토글하고, 방 모드에서 두 지점을 클릭해 회의실 범위를 지정하고, 오브젝트 모드에서 칸을 클릭해 화이트보드/유튜브/미니게임 오브젝트 좌표를 채운 뒤 각각 폼에서 추가합니다. 저장하면 `mapdata.json`이 즉시 덮어써지지만(이전 파일은 `.bak`으로 자동 백업), **실행 중인 서버에는 반영되지 않으므로 적용하려면 서버를 재시작**해야 합니다.
 
-### 5. (선택) 서버 단독 스모크 테스트
+### 4. (선택) 서버 단독 스모크 테스트
 
-브라우저 없이 join/move/broadcast/근접(+방음 구역 격리)/시그널링/iceServers/채팅/리액션/화이트보드(+영구 저장)/아바타색상/신고(+영구 저장)/미니게임/관리자차단/관리자 신고 로그 조회 플로우를 빠르게 검증하고 싶다면, 서버 실행 중에:
+브라우저 없이 join/move/broadcast/근접(+방음 구역 격리)/mediasoup SFU 시그널링(+잘못된 입력에 대한 서버 안정성)/채팅/리액션/화이트보드(+영구 저장)/아바타색상/신고(+영구 저장)/미니게임/관리자차단/관리자 신고 로그 조회 플로우를 빠르게 검증하고 싶다면, 서버 실행 중에:
 
 ```bash
 cd server
@@ -144,7 +135,9 @@ npm run smoke-test
 
 SQLite 영구 저장 파일은 기본적으로 `server/data/zep.db`에 생성됩니다 (`DB_PATH` 환경변수로 위치 변경 가능). 처음부터 다시 검증하고 싶다면 서버를 끄고 `server/data/`를 삭제한 뒤 다시 실행하세요.
 
-### 6. (선택) Redis로 여러 서버 인스턴스 실행
+이 스모크 테스트는 브라우저 없는 순수 Node 클라이언트라 실제 ICE/DTLS 핸드셰이크는 할 수 없어서(WebRTC 스택 자체가 없음), mediasoup 관련 항목은 서버의 시그널링 응답 형태와 잘못된 입력에 대한 안정성만 검증합니다. 실제로 미디어(영상 프레임)가 SFU를 통해 흐르는지, 화면 공유 전환이 되는지, 근접 이탈 시 정리되는지는 실제 카메라/마이크를 흉내 낸 2탭 브라우저 테스트로 별도 검증했습니다 (Playwright + `--use-fake-device-for-media-stream`).
+
+### 5. (선택) Redis로 여러 서버 인스턴스 실행
 
 ```bash
 redis-server &
@@ -156,12 +149,12 @@ PORT=4002 REDIS_URL=redis://localhost:6379 npm run start   # 다른 셸에서
 
 ## 실제 배포 (프로덕션)
 
-도메인 + VPS에 Caddy(자동 TLS) + 서버 + coturn(TLS)을 한 번에 올리는 `docker-compose.prod.yml` 구성이 준비되어 있습니다. DNS/방화벽 설정부터 certbot 인증서 발급, systemd 유닛 설치까지 전 과정은 **[`deploy/DEPLOY.md`](deploy/DEPLOY.md)** 를 따라 하세요.
+도메인 + VPS에 Caddy(자동 TLS) + 서버(mediasoup 포함)를 한 번에 올리는 `docker-compose.prod.yml` 구성이 준비되어 있습니다. DNS/방화벽 설정부터 systemd 유닛 설치까지 전 과정은 **[`deploy/DEPLOY.md`](deploy/DEPLOY.md)** 를 따라 하세요.
 
 핵심 요약:
-- **Caddy**가 정적 클라이언트를 서빙하고 `/socket.io`를 서버로 프록시 — 클라이언트·서버가 같은 도메인(HTTPS)이라 CORS 설정이 필요 없고, TLS 인증서도 자동 발급/갱신됩니다.
-- 서버는 외부에 포트를 노출하지 않고 Caddy를 통해서만 접근 가능합니다.
-- **coturn**은 Docker host network + certbot이 발급한 자체 TLS 인증서(`turns:`)로 동작하며, 인증서 갱신 시 자동 재시작되도록 훅이 포함되어 있습니다.
+- **Caddy**가 정적 클라이언트를 서빙하고 `/socket.io`(시그널링) + `/api`(맵 에디터)를 서버로 프록시 — 클라이언트·서버가 같은 도메인(HTTPS)이라 CORS 설정이 필요 없고, TLS 인증서도 자동 발급/갱신됩니다.
+- 서버의 시그널링 포트(3001)는 외부에 노출되지 않고 Caddy를 통해서만 접근 가능하지만, **mediasoup의 실제 화상채팅 미디어 포트(UDP/TCP, 기본 40000-40100)는 Caddy가 대신할 수 없는 실시간 트래픽이라 서버 컨테이너에서 직접 발행됩니다** — `MEDIASOUP_ANNOUNCED_IP`(VPS 공인 IP)를 반드시 설정해야 하고, 이 포트 범위를 방화벽에서 열어야 합니다.
+- **coturn**은 예전 P2P 구조의 유물로, mediasoup 도입 이후로는 앱이 사용하지 않습니다. `docker-compose.prod.yml`에는 아직 남아 있지만(선택 서비스), 배포에 필수는 아닙니다.
 - 도메인/인증서 없이 구성 파일만 미리 점검하고 싶다면 `deploy/DEPLOY.md` 맨 아래 "로컬에서 이 구성을 미리 점검하는 법" 참고 (`docker compose config`, `caddy validate`, `systemd-analyze verify`로 이미지 pull 없이 검증 가능).
 
 ## CI
@@ -170,7 +163,6 @@ PORT=4002 REDIS_URL=redis://localhost:6379 npm run start   # 다른 셸에서
 
 ## 다음 단계 제안
 
-ZEP/Gather/Topia/WorkAdventure 등 유사 플랫폼 벤치마크를 바탕으로 우선순위를 매긴 목록입니다. 실용적인 항목은 대부분 구현 완료(텍스트 채팅·리액션·공간음향·모바일 조작·화면 공유·프라이빗 회의실·오브젝트 상호작용·아바타 색상·모더레이션·미니게임·맵 JSON 외부화 + 시각적 에디터·Redis 수평 확장·영구 저장·CI)했고, 남은 것은 아키텍처 자체를 바꾸는 대형 작업 두 가지뿐입니다:
+ZEP/Gather/Topia/WorkAdventure 등 유사 플랫폼 벤치마크를 바탕으로 우선순위를 매긴 목록입니다. 실용적인 항목과 mediasoup SFU 전환까지 모두 구현 완료(텍스트 채팅·리액션·공간음향·모바일 조작·화면 공유·프라이빗 회의실·오브젝트 상호작용·아바타 색상·모더레이션·미니게임·맵 JSON 외부화 + 시각적 에디터·Redis 수평 확장·영구 저장·CI·mediasoup SFU)했고, 남은 것은 아키텍처 자체를 바꾸는 대형 작업 한 가지뿐입니다:
 
-1. 참가자가 많아질 때를 대비해 mediasoup 같은 SFU로 전환 (현재는 참가자 쌍마다 P2P/TURN 연결이라 근접 인원이 많아지면 업링크 부하 증가)
-2. ZEP Script 같은 커스텀 스크립팅 API (보안 샌드박싱 선행 필요)
+1. ZEP Script 같은 커스텀 스크립팅 API (보안 샌드박싱 선행 필요)

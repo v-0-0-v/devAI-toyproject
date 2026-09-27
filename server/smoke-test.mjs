@@ -18,7 +18,6 @@ function wait(ms) {
 }
 
 let aInit, bSawJoin, aSawMove;
-let bSawOffer, aSawAnswer, bSawIceCandidate;
 let aSawProximityJoin, bSawProximityJoin;
 let aSawGlobalChat, bSawGlobalChat, aSawNearbyChat, bSawNearbyChat, aSawReaction, bSawReaction;
 let aProximityLeftCount = 0;
@@ -38,21 +37,6 @@ b.on("player-joined", (player) => {
 
 a.on("player-moved", (payload) => {
   aSawMove = payload;
-});
-
-b.on("webrtc-offer", (payload) => {
-  bSawOffer = payload;
-  console.log("B saw webrtc-offer from:", payload.from, "sdp:", payload.offer.sdp);
-});
-
-a.on("webrtc-answer", (payload) => {
-  aSawAnswer = payload;
-  console.log("A saw webrtc-answer from:", payload.from, "sdp:", payload.answer.sdp);
-});
-
-b.on("webrtc-ice-candidate", (payload) => {
-  bSawIceCandidate = payload;
-  console.log("B saw webrtc-ice-candidate from:", payload.from, "candidate:", payload.candidate.candidate);
 });
 
 a.on("proximity-joined", (payload) => {
@@ -109,12 +93,29 @@ async function main() {
   a.emit("move", "right");
   await wait(300);
 
-  // --- WebRTC signaling relay (server treats payloads as opaque) ---
-  a.emit("webrtc-offer", { to: b.id, offer: { type: "offer", sdp: "test-sdp-offer" } });
-  await wait(200);
-  b.emit("webrtc-answer", { to: a.id, answer: { type: "answer", sdp: "test-sdp-answer" } });
-  await wait(200);
-  a.emit("webrtc-ice-candidate", { to: b.id, candidate: { candidate: "test-candidate" } });
+  // --- mediasoup SFU signaling: structural checks only. A plain Node
+  // socket.io-client can't complete a real ICE/DTLS handshake (no WebRTC
+  // stack), so this validates the server's signaling responses and its
+  // resilience to malformed input; the real end-to-end media path (actual
+  // video frames flowing through the SFU, screen share, proximity-based
+  // consume/close) is validated separately with a real 2-tab Playwright
+  // browser test — see README. ---
+  const rtpCapabilities = await a.emitWithAck("sfu-get-rtp-capabilities", null);
+  await a.emitWithAck("sfu-set-rtp-capabilities", rtpCapabilities);
+  const sendTransportOptions = await a.emitWithAck("sfu-create-transport", { direction: "send" });
+  const recvTransportOptions = await a.emitWithAck("sfu-create-transport", { direction: "recv" });
+
+  // Malformed input must fail gracefully (not crash the server for every
+  // connected player) — see index.ts's try/catch around each mediasoup call.
+  const malformedConnectResult = await a.emitWithAck("sfu-connect-transport", {
+    transportId: sendTransportOptions?.id,
+    dtlsParameters: { garbage: true },
+  });
+  const malformedProduceResult = await a.emitWithAck("sfu-produce", {
+    transportId: sendTransportOptions?.id,
+    kind: "video",
+    rtpParameters: { garbage: "nonsense" },
+  });
   await wait(200);
 
   // --- proximity: walk both players toward the open top-left corner (1,1) ---
@@ -270,23 +271,19 @@ async function main() {
     await wait(200);
   }
 
-  // --- iceServers shape: STUN always present; a turn: entry is present iff
-  // TURN_SECRET/TURN_URLS are configured (see server/.env). Either way this
-  // must never be empty, or the client would have no ICE servers at all. ---
-  const iceServers = aInit?.iceServers ?? [];
-  const hasStun = iceServers.some((s) => String(s.urls).startsWith("stun:"));
-  const turnEntry = iceServers.find((s) =>
-    (Array.isArray(s.urls) ? s.urls : [s.urls]).some((u) => String(u).startsWith("turn:"))
-  );
-  console.log("iceServers:", iceServers);
-
   const results = {
     aInit: Boolean(aInit),
     bSawJoin: Boolean(bSawJoin),
     aSawMove: Boolean(aSawMove),
-    bSawOffer: bSawOffer?.offer?.sdp === "test-sdp-offer" && bSawOffer.from === a.id,
-    aSawAnswer: aSawAnswer?.answer?.sdp === "test-sdp-answer" && aSawAnswer.from === b.id,
-    bSawIceCandidate: bSawIceCandidate?.candidate?.candidate === "test-candidate",
+    sfuRtpCapabilitiesHasCodecs:
+      Array.isArray(rtpCapabilities?.codecs) && rtpCapabilities.codecs.some((c) => c.mimeType === "audio/opus"),
+    sfuTransportShapeValid:
+      Boolean(sendTransportOptions?.iceParameters?.usernameFragment) &&
+      Array.isArray(sendTransportOptions?.iceCandidates) &&
+      Boolean(sendTransportOptions?.dtlsParameters?.fingerprints) &&
+      Boolean(recvTransportOptions?.id),
+    sfuMalformedInputFailsGracefully: malformedConnectResult?.ok === false && malformedProduceResult === null,
+    sfuServerAliveAfterMalformedInput: a.connected && b.connected,
     aSawProximityJoin: aSawProximityJoinOriginal?.peerId === b.id,
     bSawProximityJoin: bSawProximityJoinOriginal?.peerId === a.id,
     aSawGlobalChat: aSawGlobalChat?.text === "hello everyone",
@@ -323,11 +320,6 @@ async function main() {
     // check above), so this also passes on a fresh checkout with no admin token.
     adminReportsListWorksWhenAuthorized:
       !process.env.ADMIN_TOKEN || (daveReportsList?.reports?.some((r) => r.reason === "smoke-test") ?? false),
-    iceServersHasStun: hasStun,
-    // Only asserted when TURN is actually configured, so this test also
-    // passes on a fresh checkout with no server/.env (STUN-only fallback).
-    turnCredentialShape:
-      !process.env.TURN_SECRET || (Boolean(turnEntry?.username) && Boolean(turnEntry?.credential)),
   };
   console.log("results:", results);
 

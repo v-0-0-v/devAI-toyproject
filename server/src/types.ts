@@ -8,12 +8,6 @@ export interface Player {
   y: number;
 }
 
-export interface IceServerConfig {
-  urls: string | string[];
-  username?: string;
-  credential?: string;
-}
-
 export interface RoomZone {
   id: number;
   label: string;
@@ -42,7 +36,6 @@ export interface InitPayload {
     rooms: RoomZone[];
     objects: MapObject[];
   };
-  iceServers: IceServerConfig[];
 }
 
 // Sent by the client on "join". `color` is a client-picked value from the
@@ -62,21 +55,74 @@ export interface ProximityLeftPayload {
   peerId: string;
 }
 
-// The server never inspects SDP offers/answers or ICE candidates — it only
-// relays them between the two peers involved, so their contents are opaque here.
-export interface OfferPayload {
-  to: string;
-  offer: unknown;
+// --- mediasoup SFU signaling ------------------------------------------
+// Replaces the old per-pair P2P offer/answer/ICE relay (see sfu.ts's doc
+// comment for why). RTP-shaped fields (rtpCapabilities/rtpParameters/
+// dtlsParameters/ice*) are opaque here — the server passes them straight
+// into mediasoup's own APIs, and types.ts's job is just the wire shape.
+export type SfuMediaKind = "audio" | "video";
+
+export interface SfuCreateTransportPayload {
+  direction: "send" | "recv";
 }
 
-export interface AnswerPayload {
-  to: string;
-  answer: unknown;
+export interface SfuTransportOptions {
+  id: string;
+  iceParameters: unknown;
+  iceCandidates: unknown;
+  dtlsParameters: unknown;
 }
 
-export interface IceCandidatePayload {
-  to: string;
-  candidate: unknown;
+export interface SfuConnectTransportPayload {
+  transportId: string;
+  dtlsParameters: unknown;
+}
+
+export interface SfuProducePayload {
+  transportId: string;
+  kind: SfuMediaKind;
+  rtpParameters: unknown;
+}
+
+export interface SfuProduceResult {
+  id: string;
+}
+
+export interface SfuConsumePayload {
+  producerId: string;
+}
+
+export interface SfuConsumerOptions {
+  id: string;
+  producerId: string;
+  peerId: string;
+  kind: SfuMediaKind;
+  rtpParameters: unknown;
+}
+
+export interface SfuConsumePeerPayload {
+  peerId: string;
+}
+
+export interface SfuConsumePeerResult {
+  consumers: SfuConsumerOptions[];
+}
+
+export interface SfuResumeConsumerPayload {
+  consumerId: string;
+}
+
+export interface SfuCloseConsumersForPeerPayload {
+  peerId: string;
+}
+
+// Pushed to a peer's existing call-partners when they start a new producer
+// after the call was already established (e.g. their camera finished
+// initializing a moment after proximity-joined already fired).
+export interface SfuNewProducerPayload {
+  peerId: string;
+  producerId: string;
+  kind: SfuMediaKind;
 }
 
 // "global" reaches every player in the map; "nearby" reaches only players
