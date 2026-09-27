@@ -1,5 +1,14 @@
 import "dotenv/config";
 import { io } from "socket.io-client";
+import { DatabaseSync } from "node:sqlite";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+// Mirrors persistence.ts's default DB_PATH resolution (this file sits at the
+// same level as "data/" that persistence.ts's own dir-relative default
+// resolves to when run via tsx from server/). Lets this test read back what
+// the server actually persisted to disk, not just what it broadcast.
+const DB_PATH = process.env.DB_PATH ?? path.join(path.dirname(fileURLToPath(import.meta.url)), "data", "zep.db");
 
 const a = io("http://localhost:3001", { transports: ["websocket"] });
 const b = io("http://localhost:3001", { transports: ["websocket"] });
@@ -143,8 +152,23 @@ async function main() {
   await wait(200);
   a.emit("whiteboard-draw", { boardId: "board-1", x0: 0, y0: 0, x1: 10, y1: 10, color: "#ffffff" });
   await wait(200);
+
+  // The stroke must have been written to the durable SQLite log too, not
+  // just the in-memory/Redis GameStore (see persistence.ts + index.ts's
+  // whiteboard-draw handler).
+  const strokesAfterDraw = new DatabaseSync(DB_PATH, { readOnly: true })
+    .prepare("SELECT * FROM whiteboard_strokes WHERE board_id = ?")
+    .all("board-1");
+
   a.emit("whiteboard-clear", "board-1");
   await wait(200);
+
+  // ...and clearing must delete the persisted rows too, not just the
+  // in-memory copy, or a future restart would resurrect a "cleared" board.
+  const strokesAfterClear = new DatabaseSync(DB_PATH, { readOnly: true })
+    .prepare("SELECT * FROM whiteboard_strokes WHERE board_id = ?")
+    .all("board-1");
+
   a.emit("whiteboard-join", "board-1");
   await wait(200);
 
@@ -189,9 +213,13 @@ async function main() {
   dave.on("connect", () => dave.emit("join", { nickname: "Dave", color: 999999 }));
   await wait(500);
 
-  // --- report: server validates + logs, connection must survive ---
+  // --- report: server validates + logs, connection must survive, and the
+  // report is written to the persisted (SQLite) report log ---
   a.emit("report", { targetId: b.id, reason: "smoke-test" });
   await wait(200);
+  const persistedReports = new DatabaseSync(DB_PATH, { readOnly: true })
+    .prepare("SELECT * FROM reports WHERE reason = ?")
+    .all("smoke-test");
 
   // --- minigame (rock-paper-scissors): Carol and Dave both walk onto the
   // same "minigame" object, get matched, and play a round ---
@@ -229,12 +257,17 @@ async function main() {
   console.log("dave admin-auth-result (wrong token):", daveAuthResult);
 
   let realAdminBanDisconnectedTarget = true; // vacuously true unless actually tested below
+  let daveReportsList; // only populated when ADMIN_TOKEN is set below
   if (process.env.ADMIN_TOKEN) {
     dave.emit("admin-auth", process.env.ADMIN_TOKEN);
     await wait(200);
     dave.emit("admin-ban", { targetId: carol.id });
     await wait(300);
     realAdminBanDisconnectedTarget = carol.connected === false;
+
+    dave.on("admin-reports", (p) => (daveReportsList = p));
+    dave.emit("admin-list-reports");
+    await wait(200);
   }
 
   // --- iceServers shape: STUN always present; a turn: entry is present iff
@@ -266,6 +299,8 @@ async function main() {
     whiteboardDrawRelayed: bSawWhiteboardDraw?.x1 === 10 && bSawWhiteboardDraw.boardId === "board-1",
     whiteboardClearRelayed: aSawWhiteboardClear?.boardId === "board-1",
     whiteboardHistoryResetAfterClear: aWhiteboardHistory?.strokes.length === 0,
+    whiteboardStrokePersisted: strokesAfterDraw.some((s) => s.x1 === 10 && s.y1 === 10),
+    whiteboardClearPersisted: strokesAfterClear.length === 0,
     // The room-crossing pair must see a proximity-left even though they're
     // still within Chebyshev range — room mismatch alone must end the call.
     roomIsolationEndedCall: aProximityLeftCount > 0 && bProximityLeftCount > 0,
@@ -274,6 +309,7 @@ async function main() {
     avatarColorFallsBackWhenInvalid:
       typeof aSawDaveJoin?.color === "number" && PLAYER_COLORS.includes(aSawDaveJoin.color),
     serverAliveAfterReport: a.connected && b.connected,
+    reportPersisted: persistedReports.some((r) => r.reporter_id === a.id && r.target_id === b.id),
     mapObjectsIncludeMinigame: aInit?.map?.objects?.some((o) => o.id === "rps-1" && o.type === "minigame"),
     minigameMatchmakingWorked: carolMatched && daveMatched,
     minigameCarolWon:
@@ -283,6 +319,10 @@ async function main() {
     minigameOpponentLeftNotified: daveSawOpponentLeft,
     adminBanUnauthorizedIsNoOp: carolAliveAfterUnauthorizedBan,
     adminBanWorksWhenAuthorized: realAdminBanDisconnectedTarget,
+    // Only asserted when ADMIN_TOKEN is set (same opt-in as the real-ban
+    // check above), so this also passes on a fresh checkout with no admin token.
+    adminReportsListWorksWhenAuthorized:
+      !process.env.ADMIN_TOKEN || (daveReportsList?.reports?.some((r) => r.reason === "smoke-test") ?? false),
     iceServersHasStun: hasStun,
     // Only asserted when TURN is actually configured, so this test also
     // passes on a fresh checkout with no server/.env (STUN-only fallback).

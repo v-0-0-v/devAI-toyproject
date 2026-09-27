@@ -34,6 +34,10 @@ services:
       - server/.env.production
     # No published ports: only reachable through the caddy reverse proxy,
     # over the default compose network, as "server:3001".
+    volumes:
+      # SQLite persistence (whiteboard strokes + reports) — without this the
+      # data still survives a process restart but not a container recreation.
+      - server_data:/app/data
 
   # TURN relay. Uses host networking rather than `ports:` — the standard
   # recommendation for coturn, since it avoids Docker NAT-translating the
@@ -66,3 +70,4 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+  server_data:

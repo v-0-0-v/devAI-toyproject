@@ -15,6 +15,12 @@
 		reverse_proxy server:3001
 	}
 
+	# Map editor's load/save (client/editor.html + src/editor.ts) — GET is
+	# open, POST requires the ADMIN_TOKEN header; the server enforces both.
+	handle /api/* {
+		reverse_proxy server:3001
+	}
+
 	handle {
 		root * /srv
 		try_files {path} /index.html

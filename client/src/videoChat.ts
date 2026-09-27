@@ -210,8 +210,11 @@ export class VideoChat {
 
   // Local-only moderation row on each remote tile: mute affects only what I
   // hear (a Web Audio gain, see connectSpatialAudio), block also ends the
-  // call and stops it auto-reconnecting via proximity, report just logs
-  // server-side. None of this is visible to or enforced against the peer.
+  // call and stops it auto-reconnecting via proximity. Report is the only
+  // one the server acts on: it's persisted (see persistence.ts) and readable
+  // by an admin (adminPanel.ts's 신고 로그), but still not visible to the
+  // reported peer, and doesn't ban them by itself — that's a separate,
+  // explicit admin-ban action.
   private createModerationControls(peerId: string): HTMLDivElement {
     const controls = document.createElement("div");
     controls.className = "video-controls video-controls--remote";

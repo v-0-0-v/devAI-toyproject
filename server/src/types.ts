@@ -148,3 +148,29 @@ export interface AdminAuthResultPayload {
 export interface AdminBanPayload {
   targetId: string;
 }
+
+// Persisted (SQLite) copy of a report — unlike the moderation report handler
+// itself, this survives server restarts and is readable by an admin.
+export interface AdminReportEntry {
+  id: number;
+  reporterId: string;
+  reporterNickname: string;
+  targetId: string;
+  targetNickname: string;
+  reason: string;
+  createdAt: number;
+}
+
+export interface AdminReportsPayload {
+  reports: AdminReportEntry[];
+}
+
+export interface MapDataPayload {
+  width: number;
+  height: number;
+  tileSize: number;
+  proximityRadius: number;
+  walls: number[][];
+  rooms: RoomZone[];
+  objects: MapObject[];
+}

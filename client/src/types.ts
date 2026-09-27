@@ -125,3 +125,17 @@ export interface MinigameResultPayload {
 export interface AdminAuthResultPayload {
   ok: boolean;
 }
+
+export interface AdminReportEntry {
+  id: number;
+  reporterId: string;
+  reporterNickname: string;
+  targetId: string;
+  targetNickname: string;
+  reason: string;
+  createdAt: number;
+}
+
+export interface AdminReportsPayload {
+  reports: AdminReportEntry[];
+}

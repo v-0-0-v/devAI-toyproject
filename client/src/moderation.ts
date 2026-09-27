@@ -1,9 +1,8 @@
 /**
  * Minimal, session-scoped moderation: local mute/block only affect what
  * *this* browser tab does (never sent to or enforced by the server), and
- * reset on reload. There's no persistence and no admin UI in this MVP —
- * the goal is just to have the mute/block/report pipeline exist end to end,
- * matching ZEP/Gather's baseline safety tools at a scale a mini MVP warrants.
+ * reset on reload. Reporting (see videoChat.ts's 🚩 button) is the one
+ * exception — it's server-persisted and admin-visible (see adminPanel.ts).
  */
 export class Moderation {
   private blocked = new Set<string>();

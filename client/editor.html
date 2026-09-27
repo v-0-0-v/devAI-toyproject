@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ZEP Mini MVP — 맵 에디터</title>
+    <style>
+      html, body { margin: 0; padding: 0; background: #111827; color: #e5e7eb; font-family: system-ui, sans-serif; }
+      #layout { display: flex; gap: 16px; padding: 16px; align-items: flex-start; flex-wrap: wrap; }
+      h1 { font-size: 16px; margin: 0 0 8px; }
+      h2 { font-size: 13px; margin: 0 0 6px; color: #9ca3af; }
+      section {
+        background: #1f2937; border: 1px solid #374151; border-radius: 10px; padding: 10px;
+      }
+      label { display: block; font-size: 11px; color: #9ca3af; margin-bottom: 2px; }
+      input, select {
+        background: #111827; color: #e5e7eb; border: 1px solid #374151; border-radius: 6px;
+        padding: 5px 6px; font-size: 12px; box-sizing: border-box;
+      }
+      button {
+        border: none; border-radius: 6px; background: #3b82f6; color: #fff; cursor: pointer;
+        font-size: 12px; padding: 6px 10px;
+      }
+      button.secondary { background: #374151; }
+      button.danger { background: #ef4444; padding: 2px 6px; font-size: 11px; }
+
+      #top-bar { display: flex; gap: 8px; align-items: flex-end; margin-bottom: 12px; flex-wrap: wrap; }
+      #top-bar label { margin-bottom: 2px; }
+      #status { font-size: 12px; margin-left: 8px; }
+      #status.ok { color: #34d399; }
+      #status.err { color: #f87171; }
+
+      #dims { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+      #dims > div { width: 90px; }
+
+      #mode-buttons { display: flex; gap: 6px; margin-bottom: 8px; }
+      #mode-buttons button.active { background: #10b981; }
+
+      #canvas-wrap { max-width: 640px; overflow: auto; }
+      #map-canvas { background: #000; display: block; cursor: crosshair; }
+      #canvas-hint { font-size: 11px; color: #6b7280; margin-top: 6px; max-width: 500px; }
+
+      #side-panels { display: flex; flex-direction: column; gap: 12px; width: 300px; }
+      .list-row {
+        display: flex; justify-content: space-between; align-items: center; gap: 6px;
+        font-size: 11px; padding: 3px 0; border-top: 1px solid #374151;
+      }
+      .list-row span { word-break: break-word; }
+      .add-form { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+      .add-form > div { display: flex; flex-direction: column; }
+      .add-form input, .add-form select { width: 70px; }
+      .add-form button { margin-left: auto; align-self: flex-end; }
+    </style>
+  </head>
+  <body>
+    <div id="top-bar" style="padding: 12px 16px 0">
+      <h1 style="width: 100%">🗺️ ZEP Mini MVP 맵 에디터</h1>
+      <div>
+        <label for="admin-token">관리자 토큰</label>
+        <input id="admin-token" type="password" placeholder="ADMIN_TOKEN" autocomplete="off" />
+      </div>
+      <button id="load-btn" class="secondary">불러오기</button>
+      <button id="save-btn">저장</button>
+      <span id="status"></span>
+    </div>
+
+    <div id="layout">
+      <section>
+        <h2>맵 크기</h2>
+        <div id="dims">
+          <div><label for="dim-width">가로(타일)</label><input id="dim-width" type="number" min="1" /></div>
+          <div><label for="dim-height">세로(타일)</label><input id="dim-height" type="number" min="1" /></div>
+          <div><label for="dim-tile-size">타일 픽셀</label><input id="dim-tile-size" type="number" min="1" /></div>
+          <div><label for="dim-proximity">근접 반경</label><input id="dim-proximity" type="number" min="1" /></div>
+        </div>
+        <button id="resize-btn" class="secondary">크기 적용 (벽 배열 리사이즈)</button>
+
+        <h2 style="margin-top: 12px">편집 모드</h2>
+        <div id="mode-buttons">
+          <button data-mode="wall" class="active">🧱 벽</button>
+          <button data-mode="room">🚪 방</button>
+          <button data-mode="object">📦 오브젝트</button>
+        </div>
+
+        <div id="canvas-wrap">
+          <canvas id="map-canvas"></canvas>
+        </div>
+        <p id="canvas-hint">
+          <b>벽 모드</b>: 클릭/드래그로 벽 ↔ 바닥 토글.
+          <b>방 모드</b>: 두 지점을 클릭해 사각형 범위를 지정하면 아래 방 추가 폼에 좌표가 채워집니다.
+          <b>오브젝트 모드</b>: 클릭한 칸이 아래 오브젝트 추가 폼의 좌표로 채워집니다.
+        </p>
+      </section>
+
+      <div id="side-panels">
+        <section>
+          <h2>방 (Room)</h2>
+          <div id="room-list"></div>
+          <div class="add-form">
+            <div><label>id</label><input id="room-id" type="number" /></div>
+            <div><label>label</label><input id="room-label" type="text" /></div>
+            <div><label>x0</label><input id="room-x0" type="number" /></div>
+            <div><label>y0</label><input id="room-y0" type="number" /></div>
+            <div><label>x1</label><input id="room-x1" type="number" /></div>
+            <div><label>y1</label><input id="room-y1" type="number" /></div>
+            <button id="add-room-btn">추가</button>
+          </div>
+        </section>
+
+        <section>
+          <h2>오브젝트 (Object)</h2>
+          <div id="object-list"></div>
+          <div class="add-form">
+            <div><label>id</label><input id="object-id" type="text" /></div>
+            <div>
+              <label>type</label>
+              <select id="object-type">
+                <option value="whiteboard">whiteboard</option>
+                <option value="youtube">youtube</option>
+                <option value="minigame">minigame</option>
+              </select>
+            </div>
+            <div><label>x</label><input id="object-x" type="number" /></div>
+            <div><label>y</label><input id="object-y" type="number" /></div>
+            <div><label>videoId</label><input id="object-video-id" type="text" placeholder="youtube만" /></div>
+            <button id="add-object-btn">추가</button>
+          </div>
+        </section>
+      </div>
+    </div>
+    <script type="module" src="/src/editor.ts"></script>
+  </body>
+</html>

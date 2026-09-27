@@ -5,3 +5,7 @@ dist/
 *.log
 .env
 .env.production
+server/data/
+*.db
+*.db.bak
+mapdata.json.bak

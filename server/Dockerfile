@@ -19,6 +19,12 @@ COPY --from=build /app/dist ./dist
 # import.meta.url-relative default path); MAP_DATA_PATH can override it.
 COPY --from=build /app/dist/mapdata.json ./dist/mapdata.json
 
+# SQLite persistence (whiteboard strokes + reports, see persistence.ts)
+# lives here by default — mount this as a volume in production so it
+# survives container recreation, not just process restarts.
+RUN mkdir -p /app/data && chown -R node:node /app/data
+VOLUME /app/data
+
 # node:22-alpine ships an unprivileged "node" user — no need to create one.
 USER node
 

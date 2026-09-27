@@ -38,10 +38,13 @@ interface MapData {
 
 // Map layout lives in a plain JSON file instead of hardcoded TS so it can be
 // edited (or swapped out via MAP_DATA_PATH, e.g. a mounted volume in
-// production) without touching code. There's no visual editor yet — see
-// README's "다음 단계" — but this is the data format one would target.
+// production) without touching code — either directly, or via the web-based
+// editor (client/editor.html, saved through index.ts's /api/map).
 const DEFAULT_MAP_DATA_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "mapdata.json");
-const MAP_DATA_PATH = process.env.MAP_DATA_PATH ?? DEFAULT_MAP_DATA_PATH;
+// Exported so index.ts's /api/map save endpoint writes to the exact same
+// file this module read from at startup (MAP_DATA_PATH override included).
+// A save always requires a server restart to take effect — see README.
+export const MAP_DATA_PATH = process.env.MAP_DATA_PATH ?? DEFAULT_MAP_DATA_PATH;
 
 const mapData: MapData = JSON.parse(fs.readFileSync(MAP_DATA_PATH, "utf8"));
 

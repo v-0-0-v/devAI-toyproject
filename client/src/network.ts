@@ -1,6 +1,7 @@
 import { io, Socket } from "socket.io-client";
 import type {
   AdminAuthResultPayload,
+  AdminReportsPayload,
   ChatBroadcastPayload,
   ChatScope,
   Direction,
@@ -52,6 +53,7 @@ interface ServerEvents {
   "minigame-opponent-left": undefined;
   "admin-auth-result": AdminAuthResultPayload;
   "admin-banned": undefined;
+  "admin-reports": AdminReportsPayload;
 }
 
 type Listener<T> = (payload: T) => void;
@@ -77,6 +79,7 @@ const EVENT_NAMES = [
   "minigame-opponent-left",
   "admin-auth-result",
   "admin-banned",
+  "admin-reports",
 ] as const satisfies readonly (keyof ServerEvents)[];
 
 /**
@@ -107,6 +110,7 @@ export class Network {
     "minigame-opponent-left": new Set(),
     "admin-auth-result": new Set(),
     "admin-banned": new Set(),
+    "admin-reports": new Set(),
   };
 
   constructor(nickname: string, color?: number) {
@@ -191,5 +195,9 @@ export class Network {
 
   sendAdminBan(targetId: string) {
     this.socket.emit("admin-ban", { targetId });
+  }
+
+  requestAdminReports() {
+    this.socket.emit("admin-list-reports");
   }
 }

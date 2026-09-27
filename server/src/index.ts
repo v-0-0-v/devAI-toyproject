@@ -16,7 +16,15 @@ import {
   roomIdAt,
 } from "./map.js";
 import { buildIceServers } from "./turn.js";
+import { registerMapEditorRoutes } from "./mapEditor.js";
 import { MemoryGameStore, type GameStore } from "./store.js";
+import {
+  appendWhiteboardStroke,
+  clearWhiteboardStrokes,
+  getWhiteboardStrokes,
+  insertReport,
+  listRecentReports,
+} from "./persistence.js";
 import type {
   Direction,
   Player,
@@ -44,6 +52,7 @@ interface SocketData {
 const app = express();
 app.use(cors({ origin: CLIENT_ORIGIN }));
 app.get("/health", (_req, res) => res.json({ ok: true }));
+registerMapEditorRoutes(app, ADMIN_TOKEN);
 
 const httpServer = createServer(app);
 const io = new Server<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, SocketData>(httpServer, {
@@ -134,6 +143,7 @@ async function getNearbyPlayerIds(playerId: string): Promise<string[]> {
 const CHAT_MAX_LEN = 200;
 const REACTION_EMOJIS = new Set(["👍", "❤️", "😂", "😮", "👏", "🎉"]);
 const WHITEBOARD_HISTORY_LIMIT = 500;
+const ADMIN_REPORTS_LIMIT = 100;
 const VALID_BOARD_IDS = new Set(OBJECTS.filter((o) => o.type === "whiteboard").map((o) => o.id));
 const MINIGAME_OBJECT_IDS = new Set(OBJECTS.filter((o) => o.type === "minigame").map((o) => o.id));
 
@@ -342,10 +352,19 @@ io.on("connection", async (socket) => {
   // per-board history so a client opening the board later can catch up.
   socket.on("whiteboard-join", async (rawBoardId: unknown) => {
     if (typeof rawBoardId !== "string" || !VALID_BOARD_IDS.has(rawBoardId)) return;
-    socket.emit("whiteboard-history", {
-      boardId: rawBoardId,
-      strokes: await store.getWhiteboardHistory(rawBoardId),
-    });
+    let strokes = await store.getWhiteboardHistory(rawBoardId);
+    // The GameStore (memory or Redis) only holds what's been drawn since the
+    // last restart. If it's empty, this may be a cold start rather than a
+    // genuinely blank board — fall back to the durable SQLite log and warm
+    // the store back up so later joins don't need to hit the DB again.
+    if (strokes.length === 0) {
+      const persisted = getWhiteboardStrokes(rawBoardId, WHITEBOARD_HISTORY_LIMIT);
+      if (persisted.length > 0) {
+        for (const stroke of persisted) await store.pushWhiteboardStroke(rawBoardId, stroke, WHITEBOARD_HISTORY_LIMIT);
+        strokes = persisted;
+      }
+    }
+    socket.emit("whiteboard-history", { boardId: rawBoardId, strokes });
   });
 
   socket.on("whiteboard-draw", async (raw: unknown) => {
@@ -374,17 +393,19 @@ io.on("connection", async (socket) => {
     };
 
     await store.pushWhiteboardStroke(validated.boardId, validated, WHITEBOARD_HISTORY_LIMIT);
+    appendWhiteboardStroke(validated);
     io.emit("whiteboard-draw", validated);
   });
 
   socket.on("whiteboard-clear", async (rawBoardId: unknown) => {
     if (typeof rawBoardId !== "string" || !VALID_BOARD_IDS.has(rawBoardId)) return;
     await store.clearWhiteboardHistory(rawBoardId);
+    clearWhiteboardStrokes(rawBoardId);
     io.emit("whiteboard-clear", { boardId: rawBoardId });
   });
 
-  // Minimal moderation: log a structured report server-side. No admin UI
-  // reads this yet — it's a separate, lighter-weight trail than admin-ban.
+  // Minimal moderation: log a structured report server-side, both to the
+  // console and to the persisted report log an admin can read (admin-list-reports).
   socket.on("report", async (raw: unknown) => {
     const reporter = await store.getPlayer(socket.id);
     if (!reporter) return;
@@ -398,6 +419,13 @@ io.on("connection", async (socket) => {
       `[report] ${reporter.nickname} (${socket.id}) reported ${target.nickname} (${target.id})` +
         (reason ? ` — reason: ${reason}` : "")
     );
+    insertReport({
+      reporterId: socket.id,
+      reporterNickname: reporter.nickname,
+      targetId: target.id,
+      targetNickname: target.nickname,
+      reason,
+    });
   });
 
   // Server-enforced moderation: an admin (holder of ADMIN_TOKEN) can ban a
@@ -423,6 +451,13 @@ io.on("connection", async (socket) => {
     console.warn(`[admin] ${socket.id} banned ip ${ip} (target ${payload.targetId})`);
     io.to(payload.targetId).emit("admin-banned");
     await io.in(payload.targetId).disconnectSockets(true);
+  });
+
+  // Surfaces the persisted report log (see the "report" handler above) to an
+  // authenticated admin — otherwise it's a write-only audit trail nobody reads.
+  socket.on("admin-list-reports", () => {
+    if (!socket.data.isAdmin) return;
+    socket.emit("admin-reports", { reports: listRecentReports(ADMIN_REPORTS_LIMIT) });
   });
 
   // Rock-Paper-Scissors: walking onto a "minigame" object tile queues you for
